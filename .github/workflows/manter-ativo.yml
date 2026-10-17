@@ -1,0 +1,49 @@
+# Mantém o banco do Supabase ativo (evita a pausa do plano gratuito).
+# Todo dia faz uma consulta leve ao banco. Nos dias 1 e 15 de cada mês também
+# registra um commit pequeno, para o GitHub não desativar este agendamento
+# por falta de atividade no repositório.
+name: Manter Supabase ativo
+
+on:
+  schedule:
+    - cron: "23 12 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Consultar o banco
+        run: |
+          set -uo pipefail
+          URL=$(grep -oP 'SUPABASE_URL:\s*"\K[^"]+' config.js)
+          KEY=$(grep -oP 'SUPABASE_KEY:\s*"\K[^"]+' config.js)
+          if [ -z "$URL" ] || [ -z "$KEY" ]; then echo "Não achei SUPABASE_URL/SUPABASE_KEY no config.js"; exit 1; fi
+          for tentativa in 1 2 3; do
+            code=$(curl -sS -o resposta.txt -w '%{http_code}' --max-time 30 \
+              "$URL/rest/v1/keepalive?select=id&limit=1" -H "apikey: $KEY")
+            echo "Tentativa $tentativa: HTTP $code"
+            if [ "$code" = "200" ]; then exit 0; fi
+            sleep 20
+          done
+          echo "Resposta do banco:"; cat resposta.txt
+          exit 1
+
+      - name: Registrar atividade no repositório (dias 1 e 15)
+        run: |
+          set -euo pipefail
+          dia=$(date -u +%d)
+          if [ "$dia" != "01" ] && [ "$dia" != "15" ]; then echo "Hoje não é dia de commit."; exit 0; fi
+          mkdir -p .keepalive
+          date -u +"%Y-%m-%d" > .keepalive/ultimo-ping.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .keepalive
+          if git diff --cached --quiet; then echo "Nada a registrar."; exit 0; fi
+          git commit -m "chore: ping do banco ($(date -u +%F))"
+          git push origin HEAD
