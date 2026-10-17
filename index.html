@@ -2386,7 +2386,7 @@ function renderAjustes() {
     <section class="panel"><div class="panel-head"><div><h2>Sua conta</h2><p class="panel-sub">${escapeHtml(email)}</p></div></div>
       <div class="row-between"><div><b>Aparência</b><p class="muted" style="font-size:13.5px">Claro, escuro ou igual ao do aparelho.</p></div>
         <div class="seg" role="group" aria-label="Aparência">${[['light', 'Claro'], ['dark', 'Escuro'], ['auto', 'Automático']].map(([v, l]) => `<button type="button" data-action="set-theme" data-value="${v}" aria-pressed="${t === v}">${l}</button>`).join('')}</div></div>
-      <div class="row-between"><div><b>Cópia dos dados</b><p class="muted" style="font-size:13.5px">Baixe um arquivo de backup ou restaure a partir dele.</p></div>
+      <div class="row-between"><div><b>Cópia dos dados</b><p class="muted" style="font-size:13.5px">Exporte um backup, ou importe um arquivo para somar ao que você já tem. Registros repetidos são ignorados.</p></div>
         <div style="display:flex;gap:8px;flex-wrap:wrap"><button type="button" class="btn" data-action="export-json">${icon('download', 18)}Exportar</button>
           <label class="btn" for="import-file" style="cursor:pointer">${icon('upload', 18)}Importar<input type="file" id="import-file" accept="application/json" class="sr-only"></label></div></div>
       <div class="row-between"><div><b>Sair deste aparelho</b><p class="muted" style="font-size:13.5px">Seus dados continuam guardados na nuvem.</p></div>
@@ -2631,6 +2631,114 @@ function exportData() {
   URL.revokeObjectURL(url);
   showToast('Backup baixado.');
 }
+/* ---------- Importação: mescla com o que já existe ---------- */
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+const normTxt = (v) => String(v === null || v === undefined ? '' : v).trim().toLowerCase();
+const normNum = (v) => (hasNum(v) ? Number(v).toFixed(2) : '');
+const expSig = (e) => [normTxt(e.descricao), normTxt(e.categoria), e.dataPagamento, normNum(e.valorEstimado), normNum(e.valorReal), e.parcelaAtual || '', e.parcelaTotal || ''].join('|');
+const incSig = (i) => [normTxt(i.descricao), normTxt(i.categoria), i.dataPagamento, normNum(i.valor)].join('|');
+const movSig = (m) => [m.tipo, m.data, normNum(m.valor), normTxt(m.observacao)].join('|');
+const invSig = (v) => [normTxt(v.tipo), normTxt(v.instituicao), normTxt(v.descricao)].join('|');
+const countBy = (list, fn) => { const m = new Map(); list.forEach(x => { const k = fn(x); m.set(k, (m.get(k) || 0) + 1); }); return m; };
+
+// Um registro do arquivo é "repetido" se já existe no app com o mesmo id, ou com o mesmo conteúdo.
+// Registros idênticos dentro do próprio arquivo (dois Ubers iguais no mesmo dia) são ambos mantidos.
+function dedupe(rows, existing, sigFn) {
+  const ids = new Set(existing.map(x => x.id)), left = countBy(existing, sigFn);
+  const fresh = []; let ignored = 0;
+  rows.forEach(r => {
+    const k = sigFn(r);
+    if ((r.id && ids.has(r.id)) || (left.get(k) || 0) > 0) { if (!(r.id && ids.has(r.id))) left.set(k, left.get(k) - 1); ignored++; return; }
+    fresh.push(r);
+  });
+  return { fresh, ignored };
+}
+
+// Calcula o que entraria, sem alterar nada.
+function planImport(data) {
+  const arr = (x) => (Array.isArray(x) ? x : []);
+  const plan = { expenses: [], incomes: [], investments: [], movs: [], budgets: [], config: {}, ignored: { expenses: 0, incomes: 0, movs: 0, budgets: 0 }, invalid: 0 };
+
+  const okExp = arr(data.expenses).filter(e => { const ok = e && ISO_DATE.test(e.dataPagamento || '') && (hasNum(e.valorEstimado) || hasNum(e.valorReal)); if (!ok) plan.invalid++; return ok; });
+  let d = dedupe(okExp, state.expenses, expSig);
+  plan.ignored.expenses = d.ignored;
+  const usedExp = new Set(state.expenses.map(e => e.id));
+  plan.expenses = d.fresh.map(e => { const id = e.id && !usedExp.has(e.id) ? e.id : uid(); usedExp.add(id); return { ...e, id, criadoEm: e.criadoEm || Date.now() }; });
+
+  const okInc = arr(data.incomes).filter(i => { const ok = i && ISO_DATE.test(i.dataPagamento || '') && hasNum(i.valor); if (!ok) plan.invalid++; return ok; });
+  d = dedupe(okInc, state.incomes, incSig);
+  plan.ignored.incomes = d.ignored;
+  const usedInc = new Set(state.incomes.map(i => i.id));
+  plan.incomes = d.fresh.map(i => { const id = i.id && !usedInc.has(i.id) ? i.id : uid(); usedInc.add(id); return { ...i, id, criadoEm: i.criadoEm || Date.now() }; });
+
+  // investimentos: junta no existente de mesmo id ou mesmo tipo + instituição + apelido
+  const invById = new Map(state.investments.map(v => [v.id, v])), invBySig = new Map(state.investments.map(v => [invSig(v), v]));
+  const usedInv = new Set(state.investments.map(v => v.id));
+  arr(data.investments).forEach(v => {
+    if (!v) { plan.invalid++; return; }
+    let target = invById.get(v.id) || invBySig.get(invSig(v));
+    if (!target) {
+      target = { id: v.id && !usedInv.has(v.id) ? v.id : uid(), tipo: v.tipo || 'Outro', instituicao: v.instituicao || '', descricao: v.descricao || '', criadoEm: v.criadoEm || Date.now(), movimentacoes: [] };
+      usedInv.add(target.id); invById.set(target.id, target); invBySig.set(invSig(target), target); plan.investments.push(target);
+    }
+    const okMov = arr(v.movimentacoes).filter(m => { const ok = m && ISO_DATE.test(m.data || '') && hasNum(m.valor) && TIPOS_MOVIMENTACAO_INVEST.includes(m.tipo); if (!ok) plan.invalid++; return ok; });
+    const dm = dedupe(okMov, target.movimentacoes || [], movSig);
+    plan.ignored.movs += dm.ignored;
+    const usedMov = new Set((target.movimentacoes || []).map(m => m.id));
+    dm.fresh.forEach(m => { const id = m.id && !usedMov.has(m.id) ? m.id : uid(); usedMov.add(id); plan.movs.push({ inv: target, mov: { ...m, id, valor: Number(m.valor) } }); });
+  });
+
+  const haveBud = new Set(state.budgets.map(b => b.mes + '|' + b.categoria));
+  arr(data.budgets).forEach(b => {
+    if (!b || !/^\d{4}-\d{2}$/.test(b.mes || '') || !b.categoria || !hasNum(b.valor)) { plan.invalid++; return; }
+    const k = b.mes + '|' + b.categoria;
+    if (haveBud.has(k)) { plan.ignored.budgets++; return; }
+    haveBud.add(k); plan.budgets.push({ id: b.id || uid(), mes: b.mes, categoria: b.categoria, valor: Number(b.valor) });
+  });
+
+  // listas (categorias, bancos...): só acrescenta o que ainda não existe, inclusive o que os lançamentos usam
+  const cfg = data.config || {};
+  Object.keys(DEFAULT_CONFIG).forEach(k => {
+    const have = new Set(state.config[k].map(normTxt));
+    plan.config[k] = [...new Set(arr(cfg[k]).filter(n => typeof n === 'string' && n.trim() && !have.has(normTxt(n))).map(n => n.trim()))];
+  });
+  const addUsed = (list, vals) => { const have = new Set([...state.config[list], ...plan.config[list]].map(normTxt)); vals.forEach(v => { if (v && !have.has(normTxt(v))) { plan.config[list].push(v); have.add(normTxt(v)); } }); };
+  addUsed('categoriasGastos', plan.expenses.map(e => e.categoria));
+  addUsed('metodosPagamento', plan.expenses.map(e => e.metodoPagamento));
+  addUsed('contas', plan.expenses.map(e => e.conta));
+  addUsed('categoriasGanhos', plan.incomes.map(i => i.categoria));
+  addUsed('tiposInvestimento', plan.investments.map(v => v.tipo));
+  addUsed('contas', plan.investments.map(v => v.instituicao));
+  plan.novasListas = Object.values(plan.config).reduce((a, l) => a + l.length, 0);
+  return plan;
+}
+
+function importSummary(p) {
+  const ign = p.ignored.expenses + p.ignored.incomes + p.ignored.movs + p.ignored.budgets;
+  const novos = [
+    p.expenses.length && `${p.expenses.length} gastos`, p.incomes.length && `${p.incomes.length} ganhos`,
+    p.investments.length && `${p.investments.length} investimento`, p.movs.length && `${p.movs.length} movimentações de investimento`,
+    p.budgets.length && `${p.budgets.length} orçamentos`, p.novasListas && `${p.novasListas} itens novos em categorias, bancos ou formas de pagamento`
+  ].filter(Boolean);
+  return { novos, ign, invalid: p.invalid, vazio: novos.length === 0 };
+}
+
+async function applyImport(p) {
+  const keys = new Set();
+  if (p.expenses.length) { state.expenses.push(...p.expenses); keys.add('expenses'); }
+  if (p.incomes.length) { state.incomes.push(...p.incomes); keys.add('incomes'); }
+  if (p.investments.length || p.movs.length) {
+    p.investments.forEach(v => { if (!state.investments.includes(v)) state.investments.push(v); });
+    p.movs.forEach(({ inv, mov }) => { inv.movimentacoes = inv.movimentacoes || []; inv.movimentacoes.push(mov); });
+    keys.add('investments');
+  }
+  if (p.budgets.length) { state.budgets.push(...p.budgets); keys.add('budgets'); }
+  if (p.novasListas) { Object.keys(p.config).forEach(k => { if (p.config[k].length) state.config[k].push(...p.config[k]); }); keys.add('config'); }
+  // config primeiro: nada depende dela, mas assim as categorias já existem quando os lançamentos aparecem
+  const order = ['config', 'expenses', 'incomes', 'investments', 'budgets'].filter(k => keys.has(k));
+  for (const k of order) await saveNow(k);
+}
+
 function importData(ev) {
   const input = ev.target, file = input.files[0];
   if (!file) return;
@@ -2638,15 +2746,20 @@ function importData(ev) {
   reader.onload = async () => {
     try {
       const data = JSON.parse(reader.result);
-      if (!confirm('Importar substitui todos os dados atuais. Continuar?')) { input.value = ''; return; }
-      state.expenses = data.expenses || [];
-      state.incomes = data.incomes || [];
-      state.investments = data.investments || [];
-      state.budgets = data.budgets || [];
-      state.config = Object.assign({}, JSON.parse(JSON.stringify(DEFAULT_CONFIG)), data.config || {});
-      await Promise.all(['expenses', 'incomes', 'investments', 'budgets', 'config'].map(k => saveNow(k)));
+      if (!data || typeof data !== 'object') throw new Error('formato inválido');
+      const plan = planImport(data), sum = importSummary(plan);
+      if (sum.vazio) {
+        showToast(sum.ign ? `Nada novo: os ${sum.ign} registros do arquivo já estão no app.` : 'Não encontrei registros válidos nesse arquivo.');
+        input.value = ''; return;
+      }
+      const msg = `Vai ser adicionado: ${sum.novos.join(', ')}.` +
+        (sum.ign ? `\n${sum.ign} registros já existentes serão ignorados.` : '') +
+        (sum.invalid ? `\n${sum.invalid} registros com dados inválidos serão pulados.` : '') +
+        '\n\nO que você já tem no app não é alterado. Continuar?';
+      if (!confirm(msg)) { input.value = ''; return; }
+      await applyImport(plan);
       render();
-      showToast('Dados importados.');
+      showToast(`Importado: ${sum.novos.join(', ')}.`, { duration: 8000 });
     } catch (e) {
       console.error(e);
       showToast('Não foi possível importar: arquivo inválido ou erro ao salvar.');
