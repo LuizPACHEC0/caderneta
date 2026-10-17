@@ -4,6 +4,6 @@
 //  Mantenha as aspas e a vírgula no final de cada linha.
 // ============================================================
 const APP_CONFIG = {
-  SUPABASE_URL: "COLE_AQUI_O_ENDERECO_DO_PROJETO",
-  SUPABASE_KEY: "COLE_AQUI_A_CHAVE_PUBLICA",
+  SUPABASE_URL: "https://rcpwdqygzjlfmmgnepxl.supabase.co",
+  SUPABASE_KEY: "sb_publishable_IYBhSHcgWkDjZRjUvYgzow_CkH1mQ0x",
 };
