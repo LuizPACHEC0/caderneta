@@ -734,26 +734,88 @@ function friendlyAuthError(err) {
 function friendlyDbError(err) {
   const msg = String((err && err.message) || err || '');
   if ((err && (err.code === '42P01' || err.code === 'PGRST205')) || /does not exist|could not find the table/i.test(msg)) {
-    return 'A tabela do banco ainda não foi criada. Rode o arquivo supabase-setup.sql no SQL Editor do Supabase (passo 4 do guia).';
+    return 'A tabela do banco ainda não foi criada. Rode o arquivo supabase-setup.sql (o novo) no SQL Editor do Supabase antes de usar o app.';
   }
   if (/failed to fetch|network/i.test(msg)) return 'Sem conexão com a internet.';
   return 'Não foi possível carregar seus dados: ' + msg;
 }
 
+/* ---------- Mapeamento app <-> tabelas ---------- */
+const PARAM_TIPOS = {
+  categoriasGastos: 'categoria_gasto', categoriasGanhos: 'categoria_ganho', contas: 'banco',
+  metodosPagamento: 'forma_pagamento', tiposInvestimento: 'tipo_investimento'
+};
+const _serverIds = {};   // ids que existem no banco (para saber o que apagar)
+const numOrNull = (v) => (v === null || v === undefined || v === '' || isNaN(Number(v)) ? null : Number(v));
+const textOrNull = (v) => (v === null || v === undefined || v === '' ? null : String(v));
+const tsToIso = (ms) => new Date(Number(ms) || Date.now()).toISOString();
+const isoToTs = (iso) => { const t = Date.parse(iso); return isNaN(t) ? Date.now() : t; };
+
+const expenseToRow = (e) => ({
+  id: e.id, user_id: currentUser.id, descricao: e.descricao || '', categoria: e.categoria || 'Sem categoria',
+  tipo: e.tipo || 'Pontual', metodo_pagamento: e.metodoPagamento || 'Débito', conta: textOrNull(e.conta),
+  valor_estimado: numOrNull(e.valorEstimado), valor_real: numOrNull(e.valorReal),
+  status: STATUS_GASTO.includes(e.status) ? e.status : 'Previsto', data_pagamento: e.dataPagamento,
+  restituido: !!e.restituido, observacao: textOrNull(e.observacao),
+  parcela_atual: numOrNull(e.parcelaAtual), parcela_total: numOrNull(e.parcelaTotal),
+  grupo_parcela_id: textOrNull(e.grupoParcelaId), criado_em: tsToIso(e.criadoEm)
+});
+const expenseFromRow = (r) => ({
+  id: r.id, descricao: r.descricao, categoria: r.categoria, tipo: r.tipo, metodoPagamento: r.metodo_pagamento,
+  conta: r.conta || '', valorEstimado: r.valor_estimado === null ? null : Number(r.valor_estimado),
+  valorReal: r.valor_real === null ? null : Number(r.valor_real), status: r.status, dataPagamento: r.data_pagamento,
+  restituido: !!r.restituido, observacao: r.observacao || '', parcelaAtual: r.parcela_atual, parcelaTotal: r.parcela_total,
+  grupoParcelaId: r.grupo_parcela_id, criadoEm: isoToTs(r.criado_em)
+});
+const incomeToRow = (i) => ({
+  id: i.id, user_id: currentUser.id, descricao: i.descricao || '', categoria: i.categoria || 'Outros',
+  tipo: i.tipo || 'Fixo', valor: numOrNull(i.valor) || 0, data_pagamento: i.dataPagamento,
+  observacao: textOrNull(i.observacao), criado_em: tsToIso(i.criadoEm)
+});
+const incomeFromRow = (r) => ({
+  id: r.id, descricao: r.descricao, categoria: r.categoria, tipo: r.tipo, valor: Number(r.valor),
+  dataPagamento: r.data_pagamento, observacao: r.observacao || '', criadoEm: isoToTs(r.criado_em)
+});
+const budgetToRow = (b) => ({ id: b.id, user_id: currentUser.id, mes: b.mes, categoria: b.categoria, valor: numOrNull(b.valor) || 0 });
+const budgetFromRow = (r) => ({ id: r.id, mes: r.mes, categoria: r.categoria, valor: Number(r.valor) });
+
 /* ---------- Leitura ---------- */
-async function dbLoadAll() {
-  const { data, error } = await sb.from('user_data').select('key,value');
-  if (error) throw error;
-  const fresh = {};
-  (data || []).forEach(r => { if (DATA_KEYS.includes(r.key)) fresh[r.key] = r.value; });
-  state.expenses = Array.isArray(fresh.expenses) ? fresh.expenses : [];
-  state.incomes = Array.isArray(fresh.incomes) ? fresh.incomes : [];
-  state.investments = Array.isArray(fresh.investments) ? fresh.investments : [];
-  state.budgets = Array.isArray(fresh.budgets) ? fresh.budgets : [];
-  state.config = Object.assign({}, JSON.parse(JSON.stringify(DEFAULT_CONFIG)), fresh.config || {});
-  for (const k of Object.keys(DEFAULT_CONFIG)) {
-    if (!Array.isArray(state.config[k]) || state.config[k].length === 0) state.config[k] = JSON.parse(JSON.stringify(DEFAULT_CONFIG[k]));
+async function fetchAll(table, orderCol) {
+  const out = [], size = 1000;     // o Supabase devolve no máximo 1000 linhas por pedido
+  for (let from = 0; ; from += size) {
+    const { data, error } = await sb.from(table).select('*').eq('user_id', currentUser.id)
+      .order(orderCol).range(from, from + size - 1);
+    if (error) throw error;
+    out.push(...(data || []));
+    if (!data || data.length < size) break;
   }
+  return out;
+}
+
+async function dbLoadAll() {
+  const [gastos, ganhos, invs, movs, orcs, params] = await Promise.all([
+    fetchAll('gastos', 'id'), fetchAll('ganhos', 'id'), fetchAll('investimentos', 'id'),
+    fetchAll('movimentacoes_investimento', 'id'), fetchAll('orcamentos', 'id'), fetchAll('parametrizacoes', 'id')
+  ]);
+  state.expenses = gastos.map(expenseFromRow);
+  state.incomes = ganhos.map(incomeFromRow);
+  state.budgets = orcs.map(budgetFromRow);
+  const movsByInv = {};
+  movs.forEach(m => { (movsByInv[m.investimento_id] = movsByInv[m.investimento_id] || []).push({ id: m.id, tipo: m.tipo, valor: Number(m.valor), data: m.data, observacao: m.observacao || '' }); });
+  state.investments = invs.map(r => ({ id: r.id, tipo: r.tipo, instituicao: r.instituicao || '', descricao: r.descricao || '', criadoEm: isoToTs(r.criado_em), movimentacoes: movsByInv[r.id] || [] }));
+  state.config = JSON.parse(JSON.stringify(DEFAULT_CONFIG));
+  const lists = {};
+  params.sort((a, b) => a.ordem - b.ordem || a.id - b.id).forEach(r => {
+    const k = Object.keys(PARAM_TIPOS).find(x => PARAM_TIPOS[x] === r.tipo);
+    if (k) (lists[k] = lists[k] || []).push(r.nome);
+  });
+  for (const k of Object.keys(DEFAULT_CONFIG)) if (lists[k] && lists[k].length) state.config[k] = lists[k];
+  _serverIds.expenses = new Set(gastos.map(r => r.id));
+  _serverIds.incomes = new Set(ganhos.map(r => r.id));
+  _serverIds.budgets = new Set(orcs.map(r => r.id));
+  _serverIds.investments = new Set(invs.map(r => r.id));
+  _serverIds.movs = new Set(movs.map(r => r.id));
+  _serverIds.config = new Set(params.map(r => r.tipo + '\u0001' + r.nome));
   state.loaded = true;
 }
 
@@ -769,12 +831,60 @@ function resetState() {
 }
 
 /* ---------- Gravação ---------- */
+const chunk = (arr, n) => { const out = []; for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n)); return out; };
+
+// grava as linhas atuais e apaga as que sumiram desde a última leitura/gravação
+async function syncTable(table, setKey, rows) {
+  for (const part of chunk(rows, 500)) {
+    const { error } = await sb.from(table).upsert(part, { onConflict: 'user_id,id' });
+    if (error) throw error;
+  }
+  const cur = new Set(rows.map(r => r.id));
+  const removed = Array.from(_serverIds[setKey] || []).filter(id => !cur.has(id));
+  for (const part of chunk(removed, 100)) {
+    const { error } = await sb.from(table).delete().eq('user_id', currentUser.id).in('id', part);
+    if (error) throw error;
+  }
+  _serverIds[setKey] = cur;
+}
+
 async function dbWrite(key, value) {
-  const { error } = await sb.from('user_data').upsert(
-    { user_id: currentUser.id, key, value, updated_at: new Date().toISOString() },
-    { onConflict: 'user_id,key' }
-  );
-  if (error) throw error;
+  if (key === 'expenses') return syncTable('gastos', 'expenses', value.filter(e => e.dataPagamento).map(expenseToRow));
+  if (key === 'incomes') return syncTable('ganhos', 'incomes', value.filter(i => i.dataPagamento).map(incomeToRow));
+  if (key === 'budgets') {
+    const seen = new Map();                       // um orçamento por categoria e mês
+    value.forEach(b => seen.set(b.mes + '|' + b.categoria, b));
+    return syncTable('orcamentos', 'budgets', Array.from(seen.values()).map(budgetToRow));
+  }
+  if (key === 'investments') {
+    const invRows = value.map(v => ({ id: v.id, user_id: currentUser.id, tipo: v.tipo || 'Outro', instituicao: textOrNull(v.instituicao), descricao: textOrNull(v.descricao), criado_em: tsToIso(v.criadoEm) }));
+    const movRows = [];
+    value.forEach(v => (v.movimentacoes || []).forEach(m => { if (m.data) movRows.push({ id: m.id, user_id: currentUser.id, investimento_id: v.id, tipo: m.tipo, valor: numOrNull(m.valor) || 0, data: m.data, observacao: textOrNull(m.observacao) }); }));
+    // investimentos antes (pai), movimentações depois; ao apagar, o banco remove as movimentações junto
+    await syncTable('investimentos', 'investments', invRows);
+    return syncTable('movimentacoes_investimento', 'movs', movRows);
+  }
+  if (key === 'config') {
+    const rows = [], seen = new Set();
+    for (const [lista, tipo] of Object.entries(PARAM_TIPOS)) {
+      (value[lista] || []).forEach((nome, i) => {
+        const id = tipo + '\u0001' + nome;
+        if (nome && !seen.has(id)) { seen.add(id); rows.push({ user_id: currentUser.id, tipo, nome, ordem: i }); }
+      });
+    }
+    for (const part of chunk(rows, 500)) {
+      const { error } = await sb.from('parametrizacoes').upsert(part, { onConflict: 'user_id,tipo,nome' });
+      if (error) throw error;
+    }
+    for (const id of Array.from(_serverIds.config || []).filter(x => !seen.has(x))) {
+      const [tipo, nome] = id.split('\u0001');
+      const { error } = await sb.from('parametrizacoes').delete().eq('user_id', currentUser.id).eq('tipo', tipo).eq('nome', nome);
+      if (error) throw error;
+    }
+    _serverIds.config = seen;
+    return;
+  }
+  throw new Error('Tipo de dado desconhecido: ' + key);
 }
 
 function saveStatusText() {
