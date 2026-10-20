@@ -2,7 +2,7 @@
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
 <title>Caderneta — Controle financeiro</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -550,7 +550,7 @@ details.fold[open] > summary .i { transform: rotate(180deg); }
   .brand, .rail-user { display: none; }
   .l-full { display: none; }
   .l-short { display: inline; }
-  .main { margin-left: 0; padding-bottom: 84px; }
+  .main { margin-left: 0; padding-bottom: calc(84px + env(safe-area-inset-bottom)); }
   .nav {
     position: fixed; left: 0; right: 0; bottom: 0; z-index: 50; flex-direction: row; justify-content: space-around; gap: 0;
     padding: 6px 4px calc(6px + env(safe-area-inset-bottom)); background: var(--surface); border-top: 1px solid var(--line);
@@ -582,22 +582,48 @@ details.fold[open] > summary .i { transform: rotate(180deg); }
   /* tabelas viram lista de cartões */
   .tbl thead { display: none; }
   .tbl, .tbl tbody { display: block; }
-  .tbl tr.row { display: grid; grid-template-columns: 36px minmax(0, 1fr) auto; column-gap: 10px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+  .tbl tr.row { display: grid; grid-template-columns: 36px minmax(0, 1fr) auto auto; column-gap: 8px; padding: 10px 0; align-items: center; cursor: pointer; border-bottom: 1px solid var(--line); }
   .tbl tr.row td { display: none; padding: 0; border: 0; background: none !important; }
-  .tbl tr.row td.c-check, .tbl tr.row td.c-desc, .tbl tr.row td.c-amt { display: block; }
+  .tbl tr.row td.c-check, .tbl tr.row td.c-desc, .tbl tr.row td.c-amt, .tbl tr.row td.acts { display: block; }
+  .tbl tr.row td.acts { grid-column: 4; width: auto; }
+  .tbl tr.row td.acts [data-action^="delete"] { display: none; }   /* excluir fica dentro da tela de edição */
   .tbl tr.row td.c-check { grid-column: 1; align-self: center; }
   .tbl tr.row td.c-desc { grid-column: 2; min-width: 0; }
   .tbl tr.row td.c-amt { grid-column: 3; text-align: right; align-self: center; font-weight: 700; font-variant-numeric: tabular-nums; }
   .tbl tr.group { display: block; } .tbl tr.group td { display: block; padding: 16px 0 6px; }
   .m-only { display: flex; }
   .m-meta { gap: 8px; align-items: center; flex-wrap: wrap; font-size: 13px; color: var(--ink-3); margin-top: 2px; }
-  .drawer { top: auto; left: 0; right: 0; width: 100%; max-height: 94vh; border-radius: 22px 22px 0 0; transform: translateY(32px); }
-  #toast-root { bottom: 92px; width: calc(100% - 32px); }
+  .drawer { top: auto; left: 0; right: 0; width: 100%; max-height: 94vh; max-height: 94dvh; border-radius: 22px 22px 0 0; transform: translateY(32px); }
+  #toast-root { bottom: calc(92px + env(safe-area-inset-bottom)); width: calc(100% - 32px); }
 }
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; animation: none !important; }
 }
 @media print { .rail, .nav, .topbar-actions, .toolbar { display: none !important; } .main { margin: 0; } }
+
+/* ---------- Toque (celular e tablet): alvos de 44px, sem zoom ao digitar no iPhone ---------- */
+html { -webkit-text-size-adjust: 100%; }
+button, a, label, select, summary { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+@media (pointer: coarse), (max-width: 760px) {
+  input:not([type="radio"]):not([type="checkbox"]), select, textarea { font-size: 16px; }
+  .btn { min-height: 44px; }
+  .btn.small { height: auto; min-height: 40px; padding: 0 14px; }
+  .icon-btn { min-width: 44px; min-height: 44px; }
+  .icon-btn.sm { width: 40px; height: 40px; }
+  .period .icon-btn { min-width: 40px; min-height: 40px; }
+  .seg button, .seg label span { min-height: 38px; display: inline-flex; align-items: center; justify-content: center; }
+  .chip { min-height: 40px; min-width: 46px; justify-content: center; }
+  .range-inputs input { height: 44px; }
+  .pill { padding-top: 2px; padding-bottom: 2px; }
+  .pill button { min-width: 40px; min-height: 40px; display: inline-grid; place-items: center; }
+  .check { position: relative; }
+  .check::after { content: ""; position: absolute; inset: -9px; }           /* área de toque de 44px */
+  .tbl tr.row td.acts .icon-btn { min-width: 40px; min-height: 40px; }
+  .inv-acts { flex-wrap: wrap; }
+  .drawer-foot { padding-bottom: calc(14px + env(safe-area-inset-bottom)); }
+  .drawer-body { overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+  .menu button { min-height: 46px; }
+}
 
 </style>
 </head>
@@ -894,8 +920,7 @@ function saveStatusText() {
 }
 function setSaveStatus(s) {
   saveStatus = s;
-  const el = document.getElementById('save-status');
-  if (el) { el.textContent = saveStatusText(); el.className = 'save-status ' + s; }
+  document.querySelectorAll('.save-status').forEach(el => { el.textContent = saveStatusText(); el.className = 'save-status ' + s; });
 }
 
 function save(key) {
@@ -1933,6 +1958,11 @@ function render() {
   pendingCharts = [];
   root.innerHTML = `<div class="app">${renderRail()}<div class="main">${renderTopbar()}<main class="view" id="view" tabindex="-1">${renderView()}</main></div></div>`;
   mountCharts();
+  revealActiveChip();
+}
+function revealActiveChip() {
+  const box = document.querySelector('.chips'), chip = box && box.querySelector('.chip[aria-pressed="true"]');
+  if (box && chip) box.scrollLeft = chip.offsetLeft - (box.clientWidth - chip.offsetWidth) / 2;
 }
 function rerenderView() {
   const v = document.getElementById('view');
@@ -2173,7 +2203,7 @@ function renderLancamentos() {
   return `<div class="stack">
     <div class="toolbar">
       <label class="search">${icon('search', 18)}<input type="search" id="lanc-busca" placeholder="Buscar gasto" value="${escapeHtml(f.busca)}" aria-label="Buscar gasto"></label>
-      <select id="lanc-categoria" aria-label="Categoria"><option value="">Todas as categorias</option>${optionsHtml(state.config.categoriasGastos, f.categoria)}</select>
+      <select id="lanc-categoria" aria-label="Categoria"><option value="">Categorias</option>${optionsHtml(state.config.categoriasGastos, f.categoria)}</select>
       <select id="lanc-tipo" aria-label="Tipo"><option value="">Todos os tipos</option>${optionsHtml(TIPOS_LANCAMENTO, f.tipo)}</select>
       <div class="seg" role="group" aria-label="Situação">${statusBtns}</div>
       <span class="grow"></span>
@@ -2383,7 +2413,7 @@ function renderAjustes() {
   const email = currentUser ? currentUser.email : '';
   const t = state.ui.theme;
   return `<div class="stack">
-    <section class="panel"><div class="panel-head"><div><h2>Sua conta</h2><p class="panel-sub">${escapeHtml(email)}</p></div></div>
+    <section class="panel"><div class="panel-head"><div><h2>Sua conta</h2><p class="panel-sub">${escapeHtml(email)}</p></div><span class="save-status ${saveStatus}">${saveStatusText()}</span></div>
       <div class="row-between"><div><b>Aparência</b><p class="muted" style="font-size:13.5px">Claro, escuro ou igual ao do aparelho.</p></div>
         <div class="seg" role="group" aria-label="Aparência">${[['light', 'Claro'], ['dark', 'Escuro'], ['auto', 'Automático']].map(([v, l]) => `<button type="button" data-action="set-theme" data-value="${v}" aria-pressed="${t === v}">${l}</button>`).join('')}</div></div>
       <div class="row-between"><div><b>Cópia dos dados</b><p class="muted" style="font-size:13.5px">Exporte um backup, ou importe um arquivo para somar ao que você já tem. Registros repetidos são ignorados.</p></div>
@@ -2909,6 +2939,12 @@ function bindEvents() {
     if (!t.closest('.quick')) closeQuickMenu();
     const act = t.closest('[data-action]');
     if (act) { if (act.tagName === 'A') ev.preventDefault(); handleAction(act.dataset.action, act); return; }
+    const row = t.closest('tr.row[data-id]');
+    if (row && !t.closest('button, a, input, select, label')) {
+      if (row.dataset.kind === 'expense') handleAction('edit-expense', row);
+      else if (row.dataset.kind === 'income') handleAction('edit-income', row);
+      return;
+    }
     const tab = t.closest('[data-tab]');
     if (tab) { state.ui.tab = tab.dataset.tab; state.ui.lancLimit = 100; render(); window.scrollTo(0, 0); return; }
     const rm = t.closest('[data-range-mode]');
