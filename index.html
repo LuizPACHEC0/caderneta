@@ -690,13 +690,34 @@ button, a, label, select, summary { touch-action: manipulation; -webkit-tap-high
   .fat-rm { width: 44px; height: 44px; }
 }
 
+/* ---------- Extrato: tipo do lançamento e investimentos ---------- */
+.fat-pills { display: flex; flex-wrap: wrap; gap: 6px 8px; margin-top: 6px; }
+.fat-pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; font-size: 13px; font-weight: 600; background: var(--surface-3); }
+.fat-pill i { font-style: normal; font-weight: 500; opacity: .65; }
+.fat-pill.p-ganho { background: color-mix(in srgb, var(--good) 14%, var(--surface)); color: var(--good-text); }
+.fat-pill.p-gasto { background: color-mix(in srgb, var(--bad-text) 12%, var(--surface)); color: var(--bad-text); }
+.fat-pill.p-invest { background: color-mix(in srgb, var(--accent) 14%, var(--surface)); color: var(--accent); }
+.fat-row.is-x { grid-template-columns: 92px minmax(0, 1fr) 168px 210px 112px 44px; border-left: 3px solid var(--line-strong); }
+.fat-row.is-x.d-gasto { border-left-color: var(--bad-text); }
+.fat-row.is-x.d-ganho { border-left-color: var(--good); }
+.fat-row.is-x.d-invest { border-left-color: var(--accent); }
+.fat-dest { width: 100%; height: 40px; padding: 0 10px; border-radius: var(--r-ctl); border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink); min-width: 0; font-weight: 550; }
+.fat-amt.is-in { color: var(--good-text); }
+.fat-row.is-off .fat-dest { opacity: .5; }
+.fat-note.is-inv { color: var(--accent); }
+@media (max-width: 760px) {
+  .fat-row.is-x { grid-template-columns: minmax(0, 1fr) auto 44px; grid-template-areas: "when amt rm" "name name name" "dest dest dest" "cat cat cat" "note note note" "orig orig orig"; }
+  .fat-dest { grid-area: dest; }
+}
+@media (pointer: coarse), (max-width: 760px) { .fat-dest { font-size: 16px; height: 44px; } }
+
 </style>
 </head>
 <body>
 <div id="root"><div class="loading-screen">Carregando…</div></div>
 <div id="overlay-root"></div>
 <div id="toast-root" aria-live="polite"></div>
-<input type="file" id="fatura-file" class="sr-only" tabindex="-1" aria-hidden="true" accept=".pdf,.csv,.xlsx,.zip,.txt,application/pdf,text/csv,text/plain,application/zip,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
+<input type="file" id="fatura-file" class="sr-only" tabindex="-1" aria-hidden="true" accept=".pdf,.csv,.xlsx,.ofx,.zip,.txt,application/pdf,text/csv,text/plain,application/zip,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
 <script type="text/plain" id="pdfjs-lib">/**
  * @licstart The following is the entire license notice for the
  * JavaScript code in this page
@@ -2180,7 +2201,7 @@ function renderTopbar() {
           <button type="button" role="menuitem" data-action="quick-gasto">${icon('receipt', 18)}Gasto</button>
           <button type="button" role="menuitem" data-action="quick-ganho">${icon('wallet', 18)}Ganho</button>
           <button type="button" role="menuitem" data-action="quick-invest">${icon('trend', 18)}Investimento</button>
-          <button type="button" role="menuitem" data-action="import-fatura">${icon('upload', 18)}Fatura do cartão</button>
+          <button type="button" role="menuitem" data-action="import-fatura">${icon('upload', 18)}Fatura ou extrato</button>
         </div></div></div></div>${filters}</div></header>`;
 }
 
@@ -2348,7 +2369,7 @@ function renderLancamentos() {
       <select id="lanc-tipo" aria-label="Tipo"><option value="">Todos os tipos</option>${optionsHtml(TIPOS_LANCAMENTO, f.tipo)}</select>
       <div class="seg" role="group" aria-label="Situação">${statusBtns}</div>
       <span class="grow"></span>
-      <button type="button" class="btn" data-action="import-fatura">${icon('upload', 18)}Importar fatura</button>
+      <button type="button" class="btn" data-action="import-fatura">${icon('upload', 18)}Importar fatura ou extrato</button>
       <button type="button" class="btn primary" data-action="open-expense-modal">${icon('plus', 18)}Novo gasto</button>
     </div>
     <div id="results" class="stack">${renderLancResults()}</div></div>`;
@@ -3027,38 +3048,56 @@ function fatMapHeader(cells) {
   const map = {
     date: find(/^data( d[aeo] (compra|lancamento|transacao))?$/, /^data/, /^date$/),
     amount: find(/valor.*r\$/, /^valor( d[aeo] (compra|transacao))?$/, /^amount$/, /^valor/, /^montante/),
-    desc: find(/^descri/, /estabelec/, /^lancamento$/, /historico/, /^title$/, /merchant/, /^local/, /^nome$/),
+    desc: find(/^descri/, /estabelec/, /^lancamento$/, /historico/, /^title$/, /merchant/, /^local/, /^nome$/, /^titulo$/),
+    title: find(/^titulo$/),
     parcela: find(/parcela/),
     cat: find(/^categoria/, /^category/),
     card: find(/final.*cartao/),
+    entrada: find(/^(entrada|credito|credit)/),
+    saida: find(/^(saida|debito|debit)/),
+    saldo: find(/^saldo/),
   };
-  if (map.date < 0 || map.amount < 0 || map.desc < 0) return null;
+  if (map.desc === map.title) map.title = -1;
+  const split = map.entrada >= 0 && map.saida >= 0;
+  if (map.date < 0 || map.desc < 0 || (map.amount < 0 && !split)) return null;
   return { map, headers: h };
+}
+function fatExtractParcela(desc) {
+  const m = /\bparcela\s*(\d{1,2})\s*(?:\/|de)\s*(\d{1,2})\b/i.exec(desc) || /\s(\d{1,2})\/(\d{1,2})\s*$/.exec(desc);
+  if (m && Number(m[2]) > 1 && Number(m[1]) <= Number(m[2])) {
+    return { parcela: { atual: Number(m[1]), total: Number(m[2]) }, desc: desc.replace(m[0], ' ').replace(/\s*[-–]\s*$/, '').replace(/\s+/g, ' ').trim() };
+  }
+  return { parcela: null, desc };
 }
 function fatFromTable(rows) {
   let hi = -1, found = null;
   for (let i = 0; i < Math.min(rows.length, 30); i++) { const f = fatMapHeader(rows[i]); if (f) { hi = i; found = f; break; } }
   if (!found) return null;
   const { map, headers } = found;
-  const items = [];
+  const split = map.entrada >= 0 && map.saida >= 0;
+  const extrato = (map.saldo >= 0 || split) && map.parcela < 0 && map.card < 0;
+  const items = [], saldos = [];
   for (let i = hi + 1; i < rows.length; i++) {
     const r = rows[i];
     const date = fatDate(r[map.date]);
-    const amount = fatMoney(r[map.amount]);
-    if (!date || amount === null) continue;
+    if (!date) continue;
+    let amount;
+    if (split && map.amount < 0) amount = (fatMoney(r[map.entrada]) || 0) - Math.abs(fatMoney(r[map.saida]) || 0);
+    else amount = fatMoney(r[map.amount]);
     let desc = String(r[map.desc] == null ? '' : r[map.desc]).replace(/\s+/g, ' ').trim();
+    if (map.title >= 0) { const t = String(r[map.title] == null ? '' : r[map.title]).replace(/\s+/g, ' ').trim(); if (t && !fatK(desc).includes(fatK(t))) desc = (t + ' ' + desc).trim(); }
+    if (extrato && /^saldo/.test(fatN(desc))) {
+      const sv = map.saldo >= 0 ? fatMoney(r[map.saldo]) : amount;
+      if (sv !== null) saldos.push({ date, saldo: sv });
+      continue;
+    }
+    if (amount === null || (extrato && amount === 0)) continue;
     let parcela = null;
     if (map.parcela >= 0) {
       const m = /(\d{1,2})\s*(?:\/|de)\s*(\d{1,2})/i.exec(String(r[map.parcela] == null ? '' : r[map.parcela]));
       if (m && Number(m[2]) > 1) parcela = { atual: Number(m[1]), total: Number(m[2]) };
     }
-    if (!parcela) {
-      const m = /\bparcela\s*(\d{1,2})\s*(?:\/|de)\s*(\d{1,2})\b/i.exec(desc) || /\s(\d{1,2})\/(\d{1,2})\s*$/.exec(desc);
-      if (m && Number(m[2]) > 1 && Number(m[1]) <= Number(m[2])) {
-        parcela = { atual: Number(m[1]), total: Number(m[2]) };
-        desc = desc.replace(m[0], ' ').replace(/\s*[-–]\s*$/, '').replace(/\s+/g, ' ').trim();
-      }
-    }
+    if (!parcela && !extrato) { const e = fatExtractParcela(desc); parcela = e.parcela; desc = e.desc; }
     const cat = map.cat >= 0 ? String(r[map.cat] == null ? '' : r[map.cat]).trim() : '';
     items.push({
       desc, date, amount, parcela, section: null,
@@ -3066,7 +3105,7 @@ function fatFromTable(rows) {
       card: map.card >= 0 ? String(r[map.card] == null ? '' : r[map.card]).replace(/\D/g, '') : '',
     });
   }
-  return { items, headers: headers.join('|') };
+  return { items, saldos, extrato, headers: headers.join('|') };
 }
 
 /* ---------- ZIP (com ou sem senha) e XLSX ---------- */
@@ -3409,7 +3448,7 @@ function fatPickCat(cands, cats) {
 }
 function fatSuggest(it, cats, learned) {
   const key = fatK(it.descRaw || it.desc);
-  if (learned && learned.has(key)) { const l = learned.get(key); return { nome: l.nome, categoria: cats.includes(l.categoria) ? l.categoria : '' }; }
+  if (learned && learned.has(fatStem(it.descRaw || it.desc))) { const l = learned.get(fatStem(it.descRaw || it.desc)); return { nome: l.nome, categoria: cats.includes(l.categoria) ? l.categoria : '' }; }
   let nome = it.desc, categoria = '';
   for (const [re, nm, cands] of FAT_RULES) {
     if (!re.test(key)) continue;
@@ -3423,16 +3462,17 @@ function fatSuggest(it, cats, learned) {
 }
 
 /* ---------- Do arquivo à lista para revisar ---------- */
+function fatStem(raw) { return fatK(String(raw || '').replace(/\s*\d{2}\/\d{2}\s*$/, '')); }
 function fatClassify(it) {
   if (it.section === 'pagamentos') return 'pagamento';
   if (it.amount < 0) return /pagamento|pgto|pagto|saldoanterior|debitoautomatico/.test(fatK(it.desc)) ? 'pagamento' : 'credito';
   return 'compra';
 }
-function fatObs(bank, it) {
-  return `Fatura ${bank} · ${String(it.descRaw || it.desc).replace(/\s+/g, ' ').trim()}${it.card ? ` · cartão final ${it.card}` : ''}`;
+function fatObs(bank, it, doc) {
+  return `${doc === 'extrato' ? 'Extrato' : 'Fatura'} ${bank} · ${String(it.descRaw || it.desc).replace(/\s+/g, ' ').trim()}${it.card ? ` · cartão final ${it.card}` : ''}`;
 }
 function fatParseObs(obs) {
-  const m = /^Fatura [^·]+ · (.*?)(?: · cartão final \d+)?$/.exec(String(obs || ''));
+  const m = /^(?:Fatura|Extrato) [^·]+ · (.*?)(?: · cartão final \d+)?$/.exec(String(obs || ''));
   return m ? m[1] : null;
 }
 function fatBuildRows(items, ctx) {
@@ -3442,7 +3482,7 @@ function fatBuildRows(items, ctx) {
     items.forEach(it => { it.amount = -it.amount; it.kind = fatClassify(it); });
   }
   const learned = new Map();
-  expenses.forEach((e) => { const raw = fatParseObs(e.observacao); if (raw) learned.set(fatK(raw), { nome: e.descricao, categoria: e.categoria }); });
+  expenses.forEach((e) => { const raw = fatParseObs(e.observacao); if (raw) learned.set(fatStem(raw), { nome: e.descricao, categoria: e.categoria }); });
 
   const rows = [];
   let ignoredPayments = 0;
@@ -3532,10 +3572,16 @@ async function fatReadBytes(name, u8, password, depth = 0) {
 
   if (isPdf) {
     const pages = await fatPdfPages(u8, password);
+    const full = fatN(pages.map(p => p.items.map(i => i.s).join('')).join('')).replace(/\s+/g, '');
+    if (/saldododia|extratoconta/.test(full) && !/totaldestafatura/.test(full)) {
+      const ex = fatParseExtratoConta(pages);
+      if (!ex.movs.length) throw { code: 'vazio' };
+      return { docType: 'extrato', items: ex.movs, saldos: ex.saldos, holder: ex.meta.holder, periodo: ex.meta.ini ? { ini: ex.meta.ini, fim: ex.meta.fim } : null, bank: fatDetectBank(full, name), venc: null, totalDoc: null, fileName: name };
+    }
     const parsed = fatParseExtrato(pages);
     const items = fatExtratoItems(parsed);
     if (!items.length) throw { code: 'vazio' };
-    return { items, bank: fatDetectBank(parsed.full, name), venc: parsed.meta.venc, totalDoc: parsed.meta.totalDoc, fileName: name };
+    return { docType: 'fatura', items, bank: fatDetectBank(parsed.full, name), venc: parsed.meta.venc, totalDoc: parsed.meta.totalDoc, fileName: name };
   }
   if (isZip && /\.xlsx$/.test(lower)) {
     const rows = await fatXlsxRows(u8);
@@ -3555,30 +3601,325 @@ async function fatReadBytes(name, u8, password, depth = 0) {
   }
   if (/\.xls$/.test(lower)) throw { code: 'xls' };
   const text = fatDecode(u8);
+  if (/OFXHEADER|<OFX>/i.test(text.slice(0, 3000))) return fatParseOfx(text, name);
   return fatFinishTable(fatParseCsv(text), name, vencFromName, text);
 }
 function fatFinishTable(rows, name, venc, text) {
   const r = fatFromTable(rows);
   if (!r || !r.items.length) throw { code: 'colunas' };
-  return { items: r.items, bank: fatDetectBank(text || rows.slice(0, 40).map(x => x.join(' ')).join(' '), name, r.headers), venc, totalDoc: null, fileName: name };
+  const bank = fatDetectBank(text || rows.slice(0, 40).map(x => x.join(' ')).join(' '), name, r.headers);
+  if (r.extrato) return { docType: 'extrato', items: r.items, saldos: r.saldos, holder: '', periodo: null, bank, venc: null, totalDoc: null, fileName: name };
+  return { docType: 'fatura', items: r.items, bank, venc, totalDoc: null, fileName: name };
 }
 
-if (typeof module !== 'undefined') module.exports = { fatMoney, fatDate, fatParseCsv, fatFromTable, fatZipEntries, fatZipRead, fatXlsxRows, fatParseExtrato, fatExtratoItems, fatBuildRows, fatReadBytes, fatTidy, fatK, fatN, fatDetectBank };
+if (typeof module !== 'undefined') Object.assign(module.exports, { fatMoney, fatDate, fatParseCsv, fatFromTable, fatZipEntries, fatZipRead, fatXlsxRows, fatParseExtrato, fatExtratoItems, fatBuildRows, fatReadBytes, fatTidy, fatK, fatN, fatDetectBank });
 
 /* ============================================================
-   FATURA DE CARTÃO — tela de revisão e inserção dos gastos
+   EXTRATO DE CONTA — leitura (PDF, CSV, XLSX, OFX) e classificação
+   Cada lançamento vira Gasto, Ganho ou movimento de Investimento.
+   Investimento nunca entra como gasto nem como ganho.
    ============================================================ */
-const fatura = { name: '', bytes: null, bank: '', venc: null, totalDoc: null, rows: [], ignoredPayments: 0, token: 0 };
+const FAT_MONEY_RE = /^-?\d{1,3}(\.\d{3})*,\d{2}$/;
+
+/* ---------- PDF do extrato (Itaú) ---------- */
+function fatParseExtratoConta(pages) {
+  const movs = [], saldos = [];
+  const meta = { holder: '', ini: null, fim: null };
+  pages.forEach((pg, pi) => {
+    const its = pg.items.map(i => ({ s: i.s, x: i.x, y: i.y, c: i.s.replace(/\s+/g, '') })).filter(i => i.c);
+    const sorted = its.slice().sort((a, b) => a.y - b.y || a.x - b.x);
+    const lines = [];
+    sorted.forEach((i) => { const l = lines[lines.length - 1]; if (l && Math.abs(i.y - l.y) <= 3) l.items.push(i); else lines.push({ y: i.y, items: [i] }); });
+    lines.forEach((l) => {
+      l.items.sort((a, b) => a.x - b.x);
+      const t = fatN(l.items.map(i => i.c).join(''));
+      if (pi === 0) {
+        if (!meta.holder && l.items.some(i => /\d{3}\.\d{3}\.\d{3}-\d{2}/.test(i.c))) {
+          meta.holder = l.items.filter(i => /^[A-ZÀ-Þ][A-ZÀ-Þ ]+$/.test(i.s.trim())).map(i => i.s.trim()).join(' ');
+        }
+        const m = /periododevisualizacao:(\d{2})\/(\d{2})\/(\d{4})ate(\d{2})\/(\d{2})\/(\d{4})/.exec(t);
+        if (m) { meta.ini = fatIso(m[3], m[2], m[1]); meta.fim = fatIso(m[6], m[5], m[4]); }
+      }
+      const first = l.items[0];
+      const dm = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(first.c);
+      if (!dm || first.x > 80) return;
+      const date = fatIso(dm[3], dm[2], dm[1]);
+      if (!date) return;
+      const rest = l.items.slice(1);
+      const money = rest.filter(i => FAT_MONEY_RE.test(i.c));
+      const desc = rest.filter(i => !FAT_MONEY_RE.test(i.c)).map(i => i.s).join(' ').replace(/\s+/g, ' ').trim();
+      if (!money.length) return;
+      if (/^saldo/.test(fatN(desc))) { saldos.push({ date, saldo: fatMoney(money[money.length - 1].c) }); return; }
+      const v = money.find(i => i.x < 480) || money[0];
+      movs.push({ date, desc, amount: fatMoney(v.c) });
+    });
+  });
+  return { movs, saldos, meta };
+}
+
+/* ---------- OFX (extrato ou fatura, vários bancos) ---------- */
+const FAT_OFX_BANKS = { '341': 'Itaú', '336': 'C6', '260': 'Nubank', '077': 'Inter', '237': 'Bradesco', '033': 'Santander', '104': 'Caixa', '001': 'Banco do Brasil' };
+function fatParseOfx(text, name) {
+  const get = (blk, tag) => { const m = new RegExp('<' + tag + '>([^<\\r\\n]*)', 'i').exec(blk); return m ? m[1].trim() : ''; };
+  const dec = (s) => s.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'");
+  const isCC = /<CCSTMTRS>|<CREDITCARDMSGSRSV1>/i.test(text);
+  const items = [];
+  const re = /<STMTTRN>([\s\S]*?)(?=<\/STMTTRN>|<STMTTRN>|<\/BANKTRANLIST>)/gi;
+  let m;
+  while ((m = re.exec(text))) {
+    const blk = m[1];
+    const dt = /^(\d{4})(\d{2})(\d{2})/.exec(get(blk, 'DTPOSTED'));
+    const date = dt ? fatIso(dt[1], dt[2], dt[3]) : null;
+    const amount = fatMoney(get(blk, 'TRNAMT'));
+    if (!date || amount === null || amount === 0) continue;
+    const nm = dec(get(blk, 'NAME')), memo = dec(get(blk, 'MEMO'));
+    let desc = (nm && memo && fatK(memo) !== fatK(nm) ? `${nm} ${memo}` : (memo || nm)).replace(/\s+/g, ' ').trim();
+    if (isCC) {
+      const e = fatExtractParcela(desc);
+      items.push({ desc: e.desc, date, amount: -amount, parcela: e.parcela, section: null, bankCat: '', card: '' });
+    } else items.push({ desc, date, amount });
+  }
+  if (!items.length) throw { code: 'vazio' };
+  const bankId = get(text, 'BANKID').replace(/^0+(?=\d)/, '').padStart(3, '0');
+  const bank = FAT_OFX_BANKS[bankId] || fatDetectBank(get(text, 'ORG') + ' ' + get(text, 'FID'), name);
+  const lb = /<LEDGERBAL>[\s\S]*?<BALAMT>([^<\r\n]*)[\s\S]*?<DTASOF>(\d{4})(\d{2})(\d{2})/i.exec(text);
+  return {
+    docType: isCC ? 'fatura' : 'extrato', items, saldos: lb ? [{ date: fatIso(lb[2], lb[3], lb[4]), saldo: fatMoney(lb[1]) }] : [],
+    holder: '', periodo: null, bank, venc: null, totalDoc: null, fileName: name,
+  };
+}
+
+/* ---------- Conferência com os saldos do próprio extrato ---------- */
+function fatRecon(movs, saldos) {
+  const sd = saldos.filter(s => s.saldo !== null).slice().sort((a, b) => a.date.localeCompare(b.date));
+  const bad = []; let checked = 0;
+  for (let i = 1; i < sd.length; i++) {
+    if (sd[i].date === sd[i - 1].date) continue;
+    const sum = movs.filter(m => m.date > sd[i - 1].date && m.date <= sd[i].date).reduce((a, m) => a + m.amount, 0);
+    const delta = sd[i].saldo - sd[i - 1].saldo;
+    checked++;
+    if (Math.abs(sum - delta) > 0.011) bad.push({ date: sd[i].date, esperado: Math.round(delta * 100) / 100, lido: Math.round(sum * 100) / 100 });
+  }
+  return { checked, bad };
+}
+
+/* ---------- Classificação ---------- */
+const FAT_UPPER = ['CDB', 'DI', 'LCI', 'LCA', 'CDI', 'FII', 'B3', 'IPCA', 'PGBL', 'VGBL', 'XP', 'BTG', 'IOF', 'DETRAN', 'ES'];
+function fatTitle(s) {
+  return String(s || '').replace(/\s+/g, ' ').trim().toLowerCase().replace(/(^|[\s\-\/])([a-zà-ÿ0-9])/g, (m, a, b) => a + b.toUpperCase())
+    .replace(/\b(Da|De|Do|Das|Dos|E)\b/g, w => w.toLowerCase()).replace(/\b([A-Za-z0-9]{2,5})\b/g, w => (FAT_UPPER.includes(w.toUpperCase()) ? w.toUpperCase() : w))
+    .replace(/^./, c => c.toUpperCase());
+}
+const fatNoDate = (d) => String(d || '').replace(/\s+/g, ' ').trim().replace(/\s*\d{2}\/\d{2}$/, '').trim();
+
+// Aplicação / resgate / rendimento: o tipo do investimento vem do nome
+const FAT_INV_TIPOS = [
+  [/cofrinho/, 'Outro'], [/cdb/, 'CDB'], [/poupanca|poup\b/, 'Poupança'], [/tesouro/, 'Tesouro Direto'],
+  [/previd|pgbl|vgbl/, 'Previdência'], [/acoes|bolsa/, 'Ações'], [/fii|imobiliario/, 'Fundos Imobiliários'], [/cripto|bitcoin|binance|foxbit/, 'Cripto'],
+];
+const FAT_BROKER = /xpinvest|xpcorretora|xpinvestimentos|nuinvest|clearcorretora|ricoinvest|ricocorretora|btgpactual|warren|genialinvest|toroinvest|avenueseguros|binance|mercadobitcoin|foxbit|tesouronacional|b3sa|corretora|investimentos/;
+
+function fatInvName(raw) {
+  const d = fatNoDate(raw).replace(/^(APLICACAO|APLIC|APL|RESGATE|RESG|REND PAGO|REND|RENDIMENTOS?)\s+/i, '').trim();
+  return fatTitle(d) || 'Investimento';
+}
+function fatInvTipo(k, tipos) {
+  for (const [re, t] of FAT_INV_TIPOS) if (re.test(k)) return fatPickCat([t], tipos) || t;
+  return fatPickCat(['Outro'], tipos) || 'Outro';
+}
+function fatIsSelf(name, holder) {
+  const a = fatK(name), h = fatK(holder);
+  return !!h && a.length >= 5 && h.startsWith(a);
+}
+function fatCounterpart(raw) {
+  const d = fatNoDate(raw);
+  const m = /^PIX\s+(TRANSF|QRS|QR|RECEBIDO|ENVIADO)\s+(.+)$/i.exec(d) || /^(TED|DOC|TRANSF(?:ERENCIA)?)\s+(?:RECEBIDA|RECEBIDO|ENVIADA|ENVIADO)?\s*(.+)$/i.exec(d);
+  return m ? { via: m[1].toUpperCase(), name: m[2].trim() } : null;
+}
+function fatOpDate(raw, posted) {
+  const m = /(\d{2})\/(\d{2})$/.exec(String(raw || '').replace(/\s+/g, ' ').trim());
+  if (!m) return posted;
+  const y = Number(posted.slice(0, 4));
+  for (const yy of [y, y - 1]) {
+    const c = fatIso(yy, m[2], m[1]);
+    if (!c) continue;
+    const diff = (Date.parse(posted) - Date.parse(c)) / 86400000;
+    if (diff >= 0 && diff <= 7) return c;
+  }
+  return posted;
+}
+
+const FAT_SAIDA_RULES = [
+  [/financiamento|bvfinanc|stellantis|bancopan|consorcio/, null, ['Carro']],
+  [/detran|ipva|licenciamento|dpvat|multa/, null, ['Carro']],
+  [/iptu/, 'IPTU', ['Casa']],
+  [/condominio/, 'Condomínio', ['Condomínio']],
+  [/edp|enel|cemig|energia|celpe|coelba/, 'Energia', ['Energia (EDP)']],
+  [/cesan|sabesp|copasa|saneamento|agua/, 'Água', ['Água']],
+  [/telefonica|vivo|clarobr|claronet/, null, ['Dados/Celular']],
+  [/escola|colegio|faculdade|universidade|mensalidadeescolar/, null, ['Estudo']],
+  [/tarifa|iof|encargos|jurosdechequeespecial|juros/, 'Tarifa ou juros do banco', ['Aleatórios']],
+  [/saque/, 'Saque', []],
+];
+const FAT_ENTRADA_RULES = [
+  [/salario|remuneracao|folhadepag|folhapag|vencimentos|proventos/, 'Salário', ['Salário'], 'Fixo'],
+  [/aposentadoria|inss|beneficio/, 'Aposentadoria', ['Aposentadoria'], 'Fixo'],
+  [/aluguel/, 'Aluguel recebido', ['Aluguel Recebido'], 'Fixo'],
+  [/dividendo|jcp|jurossobrecapital/, null, ['Dividendos'], 'Pontual'],
+  [/estorno|devolucao|devolv|reembolso|reemb/, null, ['Restituição'], 'Pontual'],
+];
+
+function fatMetodo(k) {
+  if (/^pix/.test(k)) return 'Pix';
+  if (/boleto|tributo|^pagamento/.test(k)) return 'Boleto';
+  if (/^(ted|doc|transf)/.test(k)) return 'Transferência';
+  if (/saque/.test(k)) return 'Dinheiro';
+  return 'Débito';
+}
+function fatStripPrefix(raw) {
+  return fatNoDate(raw).replace(/^(PAG(AMENTO)?\s+(BOLETO|BOL|TRIBUTO)|PAGAMENTO|PAG|PIX\s+(TRANSF|QRS|QR)|COMPRA\s+(NO\s+)?(DEBITO|CARTAO)?|DEB\s+AUT(OMATICO)?)\s+/i, '').trim();
+}
+
+function fatClassifyMov(m, ctx, learned) {
+  const raw = String(m.desc || '').replace(/\s+/g, ' ').trim();
+  const out = m.amount < 0;
+  const k = fatK(fatNoDate(raw));
+  const cats = ctx.cfg.gastos, catsG = ctx.cfg.ganhos;
+  const r = { dest: out ? 'gasto' : 'ganho', invTipo: '', invNome: '', invTipoInv: '', nome: fatTitle(fatStripPrefix(raw)) || raw, categoria: '', tipoLanc: 'Pontual', metodo: '', include: true, flag: '', note: '' };
+  const cp = fatCounterpart(raw);
+
+  // 1) Investimentos (nunca podem virar gasto ou ganho)
+  let invAction = '';
+  if (out && /^(aplicacao|aplic|apl)/.test(k)) invAction = 'Aporte';
+  else if (!out && /^(resgate|resg|resaplic|resapl)/.test(k)) invAction = 'Resgate';
+  else if (!out && /^rend(?!a)/.test(k)) invAction = 'Rendimento';
+  if (invAction) {
+    r.dest = 'invest'; r.invTipo = invAction; r.invNome = fatInvName(raw); r.invTipoInv = fatInvTipo(k, ctx.cfg.tiposInv);
+    r.nome = `${invAction} · ${r.invNome}`;
+    r.note = invAction === 'Aporte' ? 'Investimento: não conta como gasto' : (invAction === 'Resgate' ? 'Investimento: não conta como ganho' : 'Rendimento de investimento: não conta como ganho');
+    return applyLearned(r, m, k, out, learned, raw);
+  }
+  // 2) Transferência entre contas suas
+  if (cp && ctx.holder && fatIsSelf(cp.name, ctx.holder)) {
+    r.include = false; r.flag = 'propria'; r.nome = `Transferência ${out ? 'para' : 'de'} você mesmo`;
+    r.note = 'Transferência entre contas suas: não é ganho nem gasto';
+    return r;
+  }
+  // 3) Pagamento da fatura do cartão
+  if (out && /^(pag(amento)?fatura|fatura|pgtofatura|itaucard|debautfatura|cartaodecredito|pagcartao)/.test(k)) {
+    r.include = false; r.flag = 'fatura'; r.nome = fatTitle(fatStripPrefix(raw)); r.metodo = 'Boleto';
+    r.note = 'Pagamento da fatura do cartão: os gastos entram pela importação da fatura (evita contar em dobro)';
+    return r;
+  }
+  // 4) Parece investimento em corretora: só entra se você confirmar
+  if (FAT_BROKER.test(k)) {
+    r.dest = 'invest'; r.invTipo = out ? 'Aporte' : 'Resgate'; r.invNome = fatTitle(cp ? cp.name : fatStripPrefix(raw)); r.invTipoInv = fatInvTipo(k, ctx.cfg.tiposInv);
+    r.nome = `${r.invTipo} · ${r.invNome}`; r.include = false; r.flag = 'confira';
+    r.note = 'Parece um investimento em corretora. Confirme o tipo e use + para incluir';
+    return r;
+  }
+  // 5) Gasto ou ganho comum
+  const via = cp ? (/^pix/.test(k) ? 'Pix' : cp.via) : '';
+  const person = cp ? fatTitle(cp.name) : '';
+  const qr = !!cp && (cp.via === 'QRS' || cp.via === 'QR');
+  if (out) {
+    r.metodo = fatMetodo(k);
+    if (cp) {
+      r.nome = qr ? person : `${via} para ${person}`;
+      if (qr) { const s = fatSuggest({ desc: raw, descRaw: raw, bankCat: '' }, cats, null); if (s.categoria) r.categoria = s.categoria; }
+    } else {
+      for (const [re, nm, cands] of FAT_SAIDA_RULES) { if (re.test(k)) { if (nm) r.nome = nm; r.categoria = fatPickCat(cands, cats); if (/saque/.test(k)) r.metodo = 'Dinheiro'; break; } }
+      if (!r.categoria) {
+        const s = fatSuggest({ desc: raw, descRaw: raw, bankCat: '' }, cats, null);
+        if (s.categoria) { r.categoria = s.categoria; if (s.nome && s.nome !== raw) r.nome = s.nome; }
+      }
+    }
+  } else {
+    let hit = false;
+    if (cp) r.nome = `${via} de ${person}`;
+    else for (const [re, nm, cands, tp] of FAT_ENTRADA_RULES) { if (re.test(k)) { if (nm) r.nome = nm; r.categoria = fatPickCat(cands, catsG); r.tipoLanc = tp; hit = true; break; } }
+    if (!hit) r.categoria = fatPickCat(['Outros'], catsG);
+  }
+  return applyLearned(r, m, k, out, learned, raw);
+}
+function applyLearned(r, m, k, out, learned, raw) {
+  const l = learned && learned.get(fatStem(raw));
+  if (!l) return r;
+  if (l.dest === 'gasto' && out && r.dest === 'gasto') { r.nome = l.nome || r.nome; r.categoria = l.categoria || r.categoria; }
+  else if (l.dest === 'ganho' && !out && r.dest === 'ganho') { r.nome = l.nome || r.nome; r.categoria = l.categoria || r.categoria; r.tipoLanc = l.tipoLanc || r.tipoLanc; }
+  else if (l.dest === 'invest' && r.dest === 'invest') { r.invId = l.invId; }
+  return r;
+}
+
+/* ---------- Monta a lista para revisar ---------- */
+function fatBuildExtratoRows(items, ctx) {
+  const { bank, holder, expenses, incomes, investments } = ctx;
+  const learned = new Map();
+  expenses.forEach((e) => { const raw = fatParseObs(e.observacao); if (raw) learned.set(fatStem(raw), { dest: 'gasto', nome: e.descricao, categoria: e.categoria }); });
+  incomes.forEach((e) => { const raw = fatParseObs(e.observacao); if (raw) learned.set(fatStem(raw), { dest: 'ganho', nome: e.descricao, categoria: e.categoria, tipoLanc: e.tipo }); });
+  investments.forEach((inv) => (inv.movimentacoes || []).forEach((mv) => { const raw = fatParseObs(mv.observacao); if (raw) learned.set(fatStem(raw), { dest: 'invest', invId: inv.id }); }));
+
+  const rows = [], newInvs = {};
+  items.forEach((m) => {
+    const c = fatClassifyMov(m, ctx, learned);
+    const raw = String(m.desc || '').replace(/\s+/g, ' ').trim();
+    const row = {
+      id: rows.length, doc: 'extrato', posted: m.date, date: fatOpDate(raw, m.date), raw, amount: Math.round(m.amount * 100) / 100,
+      nome: c.nome, dest: c.dest, invTipo: c.invTipo, invId: c.invId || '', categoria: c.categoria, tipoLanc: c.tipoLanc, metodo: c.metodo,
+      include: c.include, flag: c.flag, note: c.note, parcela: null, card: '',
+    };
+    if (c.dest === 'invest') {
+      const key = fatK(c.invNome);
+      if (!row.invId) {
+        const ex = investments.find(inv => { const a = fatK(inv.descricao || inv.tipo || ''); return a && key && (a === key || (key.length >= 4 && (a.includes(key) || key.includes(a)))); });
+        if (ex) row.invId = ex.id;
+        else { row.invId = 'novo:' + key; newInvs[key] = { nome: c.invNome, tipo: c.invTipoInv }; }
+      }
+    }
+    rows.push(row);
+  });
+
+  // já importado antes / parece já lançado à mão
+  const absEq = (a, b) => Math.abs(Math.abs(a) - Math.abs(b)) < 0.005;
+  const near = (d1, d2, days) => Math.abs(Date.parse(d1) - Date.parse(d2)) <= days * 86400000;
+  const val = (e) => (typeof e.valorReal === 'number' ? e.valorReal : (typeof e.valorEstimado === 'number' ? e.valorEstimado : null));
+  const pools = {
+    gasto: expenses.map(e => ({ raw: fatParseObs(e.observacao), date: e.dataPagamento, v: val(e), nome: e.descricao })),
+    ganho: incomes.map(e => ({ raw: fatParseObs(e.observacao), date: e.dataPagamento, v: e.valor, nome: e.descricao })),
+    invest: [],
+  };
+  investments.forEach(inv => (inv.movimentacoes || []).forEach(mv => pools.invest.push({ raw: fatParseObs(mv.observacao), date: mv.data, v: mv.valor, nome: inv.descricao || inv.tipo, tipo: mv.tipo })));
+  const take = (pool, fn) => { const i = pool.findIndex(fn); return i >= 0 ? pool.splice(i, 1)[0] : null; };
+  rows.forEach((r) => {
+    const pool = pools[r.dest];
+    const ja = take(pool, p => p.raw !== null && fatK(p.raw) === fatK(r.raw) && p.date === r.date && p.v !== null && absEq(p.v, r.amount));
+    if (ja) { r.flag = 'ja'; r.include = false; r.note = 'Já importado de um extrato antes'; }
+  });
+  rows.filter(r => !r.flag || r.flag === 'confira').forEach((r) => {
+    const pool = pools[r.dest];
+    const dup = take(pool, p => p.raw === null && p.v !== null && absEq(p.v, r.amount) && near(p.date, r.date, 3) && (r.dest !== 'invest' || p.tipo === r.invTipo));
+    if (dup) { r.flag = 'dup'; r.include = false; r.note = `Parece já lançado: "${dup.nome}" (${dup.date.slice(8, 10)}/${dup.date.slice(5, 7)})`; }
+  });
+  const recon = fatRecon(items.map(i => ({ date: i.date, amount: i.amount })), ctx.saldos || []);
+  return { rows, newInvs, recon };
+}
+
+if (typeof module !== 'undefined') Object.assign(module.exports, { fatParseExtratoConta, fatParseOfx, fatRecon, fatBuildExtratoRows, fatClassifyMov, fatTitle, fatOpDate });
+
+/* ============================================================
+   FATURA E EXTRATO — tela de revisão e inserção
+   ============================================================ */
+const fatura = { doc: 'fatura', name: '', bytes: null, bank: '', venc: null, periodo: null, totalDoc: null, rows: [], newInvs: {}, recon: null, ignoredPayments: 0, token: 0 };
 
 const FAT_MSG = {
   aes: 'Esse ZIP usa uma proteção mais forte que não consigo abrir aqui. Extraia o arquivo no computador e importe o CSV direto.',
   zip: 'Não consegui abrir esse arquivo. Ele pode estar corrompido ou não ter um CSV, XLSX ou PDF dentro.',
   xls: 'Planilhas .xls antigas não são lidas. Salve como .xlsx ou .csv e tente de novo.',
-  colunas: 'Não encontrei as colunas de data, descrição e valor. Confira se é o arquivo da fatura, exportado pelo app do banco.',
+  colunas: 'Não encontrei as colunas de data, descrição e valor. Confira se é a fatura ou o extrato exportado pelo app do banco.',
   vazio: 'Não encontrei lançamentos nesse arquivo. Se o PDF for uma foto ou digitalização, exporte o CSV pelo app do banco.',
-  pdf: 'Não consegui ler esse PDF. Tente exportar a fatura em CSV pelo app do banco.',
-  pdfjs: 'O leitor de PDF não carregou. Recarregue a página e tente de novo, ou importe o CSV da fatura.',
-  grande: 'Esse arquivo é grande demais para uma fatura (limite de 15 MB).',
+  pdf: 'Não consegui ler esse PDF. Tente exportar em CSV ou OFX pelo app do banco.',
+  pdfjs: 'O leitor de PDF não carregou. Recarregue a página e tente de novo, ou importe o CSV ou OFX.',
+  grande: 'Esse arquivo é grande demais (limite de 15 MB).',
 };
 const fatInFatura = () => !!document.getElementById('fat-root');
 
@@ -3592,7 +3933,7 @@ async function faturaOnFile(input) {
   if (!file) return;
   fatura.token++;
   fatura.name = file.name; fatura.bytes = null; fatura.rows = [];
-  openDrawer({ title: 'Importar fatura', wide: true, noFocus: true, hideSubmit: true, cancelLabel: 'Fechar', body: faturaLoadingHtml('Lendo a fatura…') });
+  openDrawer({ title: 'Importar fatura ou extrato', wide: true, noFocus: true, hideSubmit: true, cancelLabel: 'Fechar', body: faturaLoadingHtml('Lendo o arquivo…') });
   if (file.size > 15 * 1024 * 1024) { faturaShowError(FAT_MSG.grande); return; }
   try { fatura.bytes = new Uint8Array(await file.arrayBuffer()); }
   catch (e) { faturaShowError('Não consegui abrir o arquivo. Tente de novo.'); return; }
@@ -3600,16 +3941,27 @@ async function faturaOnFile(input) {
 }
 async function faturaProcess(password) {
   const my = fatura.token;
-  if (password) updateDrawer({ title: 'Importar fatura', wide: true, noFocus: true, hideSubmit: true, cancelLabel: 'Fechar', body: faturaLoadingHtml('Abrindo o arquivo…') });
+  if (password) updateDrawer({ title: 'Importar fatura ou extrato', wide: true, noFocus: true, hideSubmit: true, cancelLabel: 'Fechar', body: faturaLoadingHtml('Abrindo o arquivo…') });
   try {
     const res = await fatReadBytes(fatura.name, fatura.bytes, password);
     if (my !== fatura.token || !fatInFatura()) return;
     const bank = fatBankFromConfig(res.bank);
     fatura.bank = bank; fatura.venc = res.venc; fatura.totalDoc = res.totalDoc;
-    const built = fatBuildRows(res.items, { bank: bank || res.bank, expenses: state.expenses, cats: state.config.categoriasGastos });
-    built.rows.sort((a, b) => a.date.localeCompare(b.date) || a.id - b.id);
-    fatura.rows = built.rows; fatura.ignoredPayments = built.ignoredPayments;
-    fatura.detected = res.bank;
+    fatura.doc = res.docType || 'fatura';
+    fatura.periodo = res.periodo || null;
+    if (fatura.doc === 'extrato') {
+      const cfg = state.config;
+      const built = fatBuildExtratoRows(res.items, {
+        bank: bank || res.bank, holder: res.holder || '', saldos: res.saldos || [], expenses: state.expenses, incomes: state.incomes, investments: state.investments,
+        cfg: { gastos: cfg.categoriasGastos, ganhos: cfg.categoriasGanhos, metodos: cfg.metodosPagamento, tiposInv: cfg.tiposInvestimento },
+      });
+      built.rows.sort((a, b) => a.date.localeCompare(b.date) || a.id - b.id);
+      fatura.rows = built.rows; fatura.newInvs = built.newInvs; fatura.recon = built.recon; fatura.ignoredPayments = 0;
+    } else {
+      const built = fatBuildRows(res.items, { bank: bank || res.bank, expenses: state.expenses, cats: state.config.categoriasGastos });
+      built.rows.sort((a, b) => a.date.localeCompare(b.date) || a.id - b.id);
+      fatura.rows = built.rows; fatura.ignoredPayments = built.ignoredPayments; fatura.newInvs = {}; fatura.recon = null;
+    }
     faturaShowReview();
   } catch (e) {
     if (my !== fatura.token || !fatInFatura()) return;
@@ -3629,7 +3981,7 @@ function faturaLoadingHtml(msg) {
   return `<div id="fat-root" class="fat-state"><div class="fat-spin" aria-hidden="true"></div><p>${escapeHtml(msg)}</p></div>`;
 }
 function faturaShowError(msg) {
-  updateDrawer({ title: 'Importar fatura', wide: true, noFocus: true, hideSubmit: true, cancelLabel: 'Fechar',
+  updateDrawer({ title: 'Importar fatura ou extrato', wide: true, noFocus: true, hideSubmit: true, cancelLabel: 'Fechar',
     body: `<div id="fat-root" class="fat-state"><p class="fat-err">${escapeHtml(msg)}</p>
       <button type="button" class="btn primary" data-action="import-fatura">${icon('upload', 18)}Escolher outro arquivo</button></div>` });
 }
@@ -3647,8 +3999,8 @@ function faturaPassword(form) {
   faturaProcess(String(pw));
 }
 
-function fatCatOptions(sel) {
-  const list = state.config.categoriasGastos.slice();
+function fatCatOptions(sel, base) {
+  const list = (base || state.config.categoriasGastos).slice();
   if (sel && !list.includes(sel)) list.push(sel);
   return `<option value="">Sem categoria</option>${optionsHtml(list, sel)}`;
 }
@@ -3656,7 +4008,31 @@ function fatDateLabel(iso) {
   const y = iso.slice(0, 4), cur = fatura.venc ? fatura.venc.slice(0, 4) : String(new Date().getFullYear());
   return dayMonthBR(iso) + (y !== cur ? ` ${y}` : '');
 }
+function fatInvOptions(sel) {
+  const ex = state.investments.map(inv => [inv.id, `${inv.descricao || inv.tipo}${inv.instituicao ? ' · ' + inv.instituicao : ''}`]);
+  const nw = Object.entries(fatura.newInvs).map(([k, v]) => [`novo:${k}`, `Novo: ${v.nome} (${v.tipo})`]);
+  return ex.concat(nw).map(([v, l]) => `<option value="${escapeHtml(v)}"${v === sel ? ' selected' : ''}>${escapeHtml(l)}</option>`).join('');
+}
+function fatRowExtratoHtml(r, i) {
+  const out = r.amount < 0;
+  const cur = r.dest === 'invest' ? r.invTipo : r.dest;
+  const opts = out ? [['gasto', 'Gasto'], ['Aporte', 'Aporte em investimento']] : [['ganho', 'Ganho'], ['Resgate', 'Resgate de investimento'], ['Rendimento', 'Rendimento de investimento']];
+  const tipoSel = `<select class="fat-dest" data-fat="dest" data-i="${i}" aria-label="Tipo do lançamento">${opts.map(([v, l]) => `<option value="${v}"${v === cur ? ' selected' : ''}>${l}</option>`).join('')}</select>`;
+  const second = r.dest === 'invest'
+    ? `<select class="fat-cat" data-fat="inv" data-i="${i}" aria-label="Investimento">${fatInvOptions(r.invId)}</select>`
+    : `<select class="fat-cat${r.categoria ? '' : ' is-empty'}" data-fat="cat" data-i="${i}" aria-label="Categoria">${fatCatOptions(r.categoria, r.dest === 'ganho' ? state.config.categoriasGanhos : state.config.categoriasGastos)}</select>`;
+  const lbl = r.include ? 'Remover da importação' : 'Incluir na importação';
+  return `<li class="fat-row is-x d-${r.dest}${r.include ? '' : ' is-off'}" data-i="${i}">
+    <div class="fat-when">${fatDateLabel(r.date)}</div>
+    <input class="fat-name" type="text" data-fat="nome" data-i="${i}" value="${escapeHtml(r.nome)}" aria-label="Nome do lançamento" autocomplete="off">
+    ${tipoSel}${second}
+    <div class="fat-amt ${out ? '' : 'is-in'}">${out ? '' : '+'}${formatBRL(r.amount)}</div>
+    <button type="button" class="icon-btn fat-rm" data-action="fat-toggle" data-i="${i}" aria-label="${lbl}" title="${lbl}">${icon(r.include ? 'x' : 'plus', 18)}</button>
+    ${r.note ? `<div class="fat-note${r.dest === 'invest' && r.include ? ' is-inv' : ''}">${escapeHtml(r.note)}</div>` : ''}
+    <div class="fat-orig">No extrato: ${escapeHtml(r.raw)}</div></li>`;
+}
 function fatRowHtml(r, i) {
+  if (r.doc === 'extrato') return fatRowExtratoHtml(r, i);
   const chip = r.parcela ? `<span class="badge">parcela ${r.parcela.atual}/${r.parcela.total}</span>` : '';
   const card = r.card ? `<span class="fat-card">cartão final ${escapeHtml(r.card)}</span>` : '';
   if (r.kind === 'credito') {
@@ -3674,7 +4050,25 @@ function fatRowHtml(r, i) {
     ${r.note ? `<div class="fat-note">${escapeHtml(r.note)}</div>` : ''}
     <div class="fat-orig">Na fatura: ${escapeHtml(r.raw)} ${card}</div></li>`;
 }
+function faturaSummaryExtrato() {
+  const rows = fatura.rows, inc = rows.filter(r => r.include);
+  const sum = (d, t) => inc.filter(r => r.dest === d && (!t || r.invTipo === t)).reduce((a, r) => a + Math.abs(r.amount), 0);
+  const cnt = (d, t) => inc.filter(r => r.dest === d && (!t || r.invTipo === t)).length;
+  const semCat = inc.filter(r => r.dest !== 'invest' && !r.categoria).length;
+  // saldo dos investimentos depois da importação
+  const delta = {};
+  inc.filter(r => r.dest === 'invest').forEach((r) => { delta[r.invId] = (delta[r.invId] || 0) + (r.invTipo === 'Resgate' ? -1 : 1) * Math.abs(r.amount); });
+  const negativos = Object.entries(delta).map(([id, d]) => {
+    const inv = state.investments.find(x => x.id === id);
+    const saldo = (inv ? investmentBalance(inv) : 0) + d;
+    const nome = inv ? (inv.descricao || inv.tipo) : ((fatura.newInvs[id.replace('novo:', '')] || {}).nome || 'Investimento');
+    return saldo < -0.005 ? { nome, saldo } : null;
+  }).filter(Boolean);
+  return { sel: inc.length, lidas: rows.length, ganhos: sum('ganho'), nGanhos: cnt('ganho'), gastos: sum('gasto'), nGastos: cnt('gasto'),
+    aportes: sum('invest', 'Aporte'), resgates: sum('invest', 'Resgate'), rends: sum('invest', 'Rendimento'), nInv: cnt('invest'), semCat, negativos };
+}
 function faturaSummary() {
+  if (fatura.doc === 'extrato') return faturaSummaryExtrato();
   const rows = fatura.rows;
   const sel = rows.filter(r => r.kind === 'compra' && r.include);
   const total = sel.reduce((s, r) => s + r.amount, 0);
@@ -3690,12 +4084,33 @@ function faturaSummary() {
   }
   return { sel: sel.length, total, semCat, lidas, conf };
 }
+function faturaSumHtmlExtrato() {
+  const s = faturaSummary(), rc = fatura.recon;
+  const pills = [];
+  if (s.nGanhos) pills.push(`<span class="fat-pill p-ganho">Ganhos +${formatBRL(s.ganhos)} <i>${s.nGanhos}</i></span>`);
+  if (s.nGastos) pills.push(`<span class="fat-pill p-gasto">Gastos ${formatBRL(s.gastos)} <i>${s.nGastos}</i></span>`);
+  if (s.nInv) pills.push(`<span class="fat-pill p-invest">Investimentos: aportes ${formatBRL(s.aportes)}${s.resgates ? ` · resgates ${formatBRL(s.resgates)}` : ''}${s.rends ? ` · rendimentos ${formatBRL(s.rends)}` : ''} <i>${s.nInv}</i></span>`);
+  let conf = '';
+  if (rc && rc.checked) {
+    conf = rc.bad.length
+      ? `<span class="fat-warn">A leitura não bate com o saldo do extrato em ${rc.bad.slice(0, 3).map(b => `${b.date.slice(8, 10)}/${b.date.slice(5, 7)}`).join(', ')}${rc.bad.length > 3 ? '…' : ''}. Confira se faltou alguma linha.</span>`
+      : `<span class="fat-ok">${icon('check', 14)} Conferido com os saldos do extrato (${rc.checked} dias)</span>`;
+  }
+  const warns = [];
+  if (s.semCat) warns.push(`${s.semCat} sem categoria`);
+  s.negativos.forEach(n => warns.push(`o saldo de “${n.nome}” ficaria negativo (${formatBRL(n.saldo)}): falta registrar aportes anteriores`));
+  return `<b>${s.sel} de ${s.lidas} lançamentos</b> serão inseridos
+    <div class="fat-pills">${pills.join('') || '<span class="muted">Nada selecionado</span>'}</div>
+    ${conf ? `<div class="fat-conf">${conf}</div>` : ''}${warns.length ? `<div class="fat-conf"><span class="fat-warn">${escapeHtml(warns.join(' · '))}</span></div>` : ''}`;
+}
 function faturaSumHtml() {
+  if (fatura.doc === 'extrato') return faturaSumHtmlExtrato();
   const s = faturaSummary();
   return `<b>${s.sel} de ${s.lidas} ${s.lidas === 1 ? 'lançamento' : 'lançamentos'}</b> serão inseridos · <b>${formatBRL(s.total)}</b>
     ${s.semCat ? `<span class="fat-warn">${s.semCat} sem categoria</span>` : ''}${s.conf ? `<div class="fat-conf">${s.conf}</div>` : ''}`;
 }
 function faturaShowReview() {
+  const ex = fatura.doc === 'extrato';
   const s = faturaSummary();
   const banks = state.config.contas.slice();
   if (fatura.bank && !banks.includes(fatura.bank)) banks.push(fatura.bank);
@@ -3703,40 +4118,53 @@ function faturaShowReview() {
   const info = [];
   if (fatura.ignoredPayments) info.push(`${fatura.ignoredPayments} ${fatura.ignoredPayments === 1 ? 'pagamento da fatura foi ignorado' : 'pagamentos da fatura foram ignorados'}`);
   if (flagged) info.push(`${flagged} ${flagged === 1 ? 'parece já lançado e foi desmarcado' : 'parecem já lançados e foram desmarcados'}`);
+  if (ex) {
+    const nf = fatura.rows.filter(r => r.flag === 'fatura').length, np = fatura.rows.filter(r => r.flag === 'propria').length, nc = fatura.rows.filter(r => r.flag === 'confira').length;
+    if (nf) info.push(`${nf} ${nf === 1 ? 'pagamento de fatura do cartão desmarcado' : 'pagamentos de fatura do cartão desmarcados'}`);
+    if (np) info.push(`${np} ${np === 1 ? 'transferência entre contas suas desmarcada' : 'transferências entre contas suas desmarcadas'}`);
+    if (nc) info.push(`${nc} para confirmar`);
+  }
+  const rangeTxt = fatura.periodo ? `Período ${fatura.periodo.ini.slice(8, 10)}/${fatura.periodo.ini.slice(5, 7)}/${fatura.periodo.ini.slice(0, 4)} a ${fatura.periodo.fim.slice(8, 10)}/${fatura.periodo.fim.slice(5, 7)}/${fatura.periodo.fim.slice(0, 4)}` : '';
   updateDrawer({
-    title: 'Revisar fatura', wide: true, noFocus: true, formId: 'fatura-form',
-    submitLabel: `Inserir ${s.sel} ${s.sel === 1 ? 'gasto' : 'gastos'}`, submitDisabled: !s.sel || !fatura.bank,
+    title: ex ? 'Revisar extrato' : 'Revisar fatura', wide: true, noFocus: true, formId: 'fatura-form',
+    submitLabel: fatInsertLabel(s), submitDisabled: !s.sel || !fatura.bank,
     body: `<div id="fat-root"><form id="fatura-form" novalidate>
       <div class="fat-sum" id="fat-sum" aria-live="polite">${faturaSumHtml()}</div>
       <div class="fat-top">
-        <div class="field"><label for="fat-bank">Banco do cartão</label>
+        <div class="field"><label for="fat-bank">${ex ? "Banco da conta" : "Banco do cartão"}</label>
           <select id="fat-bank">${fatura.bank ? '' : '<option value="">Escolha o banco</option>'}${optionsHtml(banks, fatura.bank)}</select></div>
-        <div class="fat-file"><span class="muted">Arquivo</span><b>${escapeHtml(fatura.name)}</b>${fatura.venc ? `<span class="muted">Vencimento ${fatura.venc.slice(8, 10)}/${fatura.venc.slice(5, 7)}/${fatura.venc.slice(0, 4)}</span>` : ''}</div>
+        <div class="fat-file"><span class="muted">Arquivo</span><b>${escapeHtml(fatura.name)}</b>${fatura.venc ? `<span class="muted">Vencimento ${fatura.venc.slice(8, 10)}/${fatura.venc.slice(5, 7)}/${fatura.venc.slice(0, 4)}</span>` : ''}${rangeTxt ? `<span class="muted">${rangeTxt}</span>` : ''}</div>
       </div>
-      <p class="fat-help">Revise os nomes e categorias. Use <b>×</b> para tirar da importação o que você já lançou. Tudo será inserido como <b>Crédito</b>, já <b>pago</b>, na data da fatura.</p>
+      ${ex
+        ? '<p class="fat-help">Cada lançamento vira <b>Gasto</b>, <b>Ganho</b> ou movimento de <b>Investimento</b>. Aplicações e resgates ficam em Investimentos e nunca contam como gasto ou ganho. Use <b>×</b> para tirar da importação o que você já lançou. Tudo entra como pago.</p>'
+        : '<p class="fat-help">Revise os nomes e categorias. Use <b>×</b> para tirar da importação o que você já lançou. Tudo será inserido como <b>Crédito</b>, já <b>pago</b>, na data da fatura.</p>'}
       ${info.length ? `<p class="fat-info">${escapeHtml(info.join(' · '))}.</p>` : ''}
       <ul class="fat-list" id="fat-list">${fatura.rows.map(fatRowHtml).join('')}</ul></form></div>`,
   });
+}
+function fatInsertLabel(s) {
+  if (fatura.doc === 'extrato') return `Inserir ${s.sel} ${s.sel === 1 ? 'lançamento' : 'lançamentos'}`;
+  return `Inserir ${s.sel} ${s.sel === 1 ? 'gasto' : 'gastos'}`;
 }
 function faturaRefresh() {
   const s = faturaSummary();
   const sum = document.getElementById('fat-sum');
   if (sum) sum.innerHTML = faturaSumHtml();
   const b = document.getElementById('drawer-submit');
-  if (b) { b.textContent = `Inserir ${s.sel} ${s.sel === 1 ? 'gasto' : 'gastos'}`; b.disabled = !s.sel || !fatura.bank; }
+  if (b) { b.textContent = fatInsertLabel(s); b.disabled = !s.sel || !fatura.bank; }
 }
 
 /* ---------- Ações ---------- */
 function faturaToggle(i) {
   const r = fatura.rows[Number(i)];
-  if (!r || r.kind !== 'compra') return;
+  if (!r || (r.doc !== 'extrato' && r.kind !== 'compra')) return;
   r.include = !r.include;
   const li = document.querySelector(`#fat-list .fat-row[data-i="${i}"]`);
   if (li) {
     li.classList.toggle('is-off', !r.include);
     const btn = li.querySelector('.fat-rm');
     btn.innerHTML = icon(r.include ? 'x' : 'plus', 18);
-    const lbl = r.include ? 'Remover da importação' : 'Incluir de novo';
+    const lbl = r.include ? 'Remover da importação' : (r.doc === 'extrato' ? 'Incluir na importação' : 'Incluir de novo');
     btn.setAttribute('aria-label', lbl); btn.title = lbl;
   }
   faturaRefresh();
@@ -3745,9 +4173,36 @@ function faturaEdit(el) {
   const r = fatura.rows[Number(el.dataset.i)];
   if (!r) return;
   if (el.dataset.fat === 'nome') r.nome = el.value;
+  else if (el.dataset.fat === 'inv') { r.invId = el.value; faturaRefresh(); }
+  else if (el.dataset.fat === 'dest') faturaSetDest(el);
   else { r.categoria = el.value; el.classList.toggle('is-empty', !el.value); faturaRefresh(); }
 }
+function faturaSetDest(el) {
+  const i = Number(el.dataset.i), r = fatura.rows[i];
+  if (!r) return;
+  const v = el.value;
+  if (v === 'gasto' || v === 'ganho') {
+    r.dest = v; r.invTipo = ''; r.invId = '';
+    r.categoria = v === 'ganho' ? (fatPickCat(['Outros'], state.config.categoriasGanhos) || '') : '';
+    r.metodo = r.metodo || fatMetodo(fatK(r.raw));
+    if (r.flag === 'confira') r.flag = '';
+    r.note = r.flag === 'propria' || r.flag === 'fatura' || r.flag === 'dup' || r.flag === 'ja' ? r.note : '';
+  } else {
+    r.dest = 'invest'; r.invTipo = v; r.categoria = '';
+    if (!r.invId) {
+      const nome = fatInvName(r.raw), key = fatK(nome);
+      const ex = state.investments.find(inv => fatK(inv.descricao || inv.tipo || '') === key);
+      if (ex) r.invId = ex.id;
+      else { r.invId = 'novo:' + key; if (!fatura.newInvs[key]) fatura.newInvs[key] = { nome, tipo: fatInvTipo(fatK(r.raw), state.config.tiposInvestimento) }; }
+    }
+    r.note = v === 'Aporte' ? 'Investimento: não conta como gasto' : (v === 'Resgate' ? 'Investimento: não conta como ganho' : 'Rendimento de investimento: não conta como ganho');
+  }
+  const li = document.querySelector(`#fat-list .fat-row[data-i="${i}"]`);
+  if (li) { const tmp = document.createElement('div'); tmp.innerHTML = fatRowHtml(r, i); li.replaceWith(tmp.firstElementChild); }
+  faturaRefresh();
+}
 function faturaInsert() {
+  if (fatura.doc === 'extrato') { faturaInsertExtrato(); return; }
   const sel = fatura.rows.filter(r => r.kind === 'compra' && r.include);
   if (!fatura.bank) { showToast('Escolha o banco do cartão.'); return; }
   if (!sel.length) { showToast('Nenhum lançamento selecionado.'); return; }
@@ -3782,6 +4237,83 @@ function faturaInsert() {
   showToast(`${ids.length} ${ids.length === 1 ? 'gasto inserido' : 'gastos inseridos'} da fatura.`, {
     duration: 9000,
     action: { label: 'Desfazer', onClick: () => { const set = new Set(ids); state.expenses = state.expenses.filter(e => !set.has(e.id)); save('expenses'); render(); } },
+  });
+}
+
+/* ---------- Inserir o extrato: gastos, ganhos e investimentos ---------- */
+function faturaInsertExtrato() {
+  const sel = fatura.rows.filter(r => r.include);
+  if (!fatura.bank) { showToast('Escolha o banco da conta.'); return; }
+  if (!sel.length) { showToast('Nenhum lançamento selecionado.'); return; }
+  const bank = fatura.bank;
+  if (!state.config.contas.some(c => fatK(c) === fatK(bank))) addCategoria('contas', bank);
+  const conta = state.config.contas.find(c => fatK(c) === fatK(bank)) || bank;
+  const now = Date.now(), made = { exp: [], inc: [], inv: [], movs: [] };
+  const metodoDe = (m) => {
+    const nome = m || 'Débito';
+    let f = state.config.metodosPagamento.find(x => fatK(x) === fatK(nome));
+    if (!f) { addCategoria('metodosPagamento', nome); f = nome; }
+    return f;
+  };
+  const invReal = {};
+  const invFor = (r) => {
+    if (!String(r.invId).startsWith('novo:')) return r.invId;
+    if (invReal[r.invId]) return invReal[r.invId];
+    const def = fatura.newInvs[r.invId.replace('novo:', '')] || { nome: 'Investimento', tipo: 'Outro' };
+    const inv = { id: uid(), tipo: def.tipo, instituicao: conta, descricao: def.nome, movimentacoes: [], criadoEm: now };
+    state.investments.push(inv); made.inv.push(inv.id);
+    invReal[r.invId] = inv.id;
+    return inv.id;
+  };
+  sel.forEach((r, i) => {
+    const obs = fatObs(conta, { descRaw: r.raw, card: '' }, 'extrato');
+    const valor = Math.abs(r.amount);
+    const nome = (r.nome || '').trim() || r.raw;
+    if (r.dest === 'gasto') {
+      const id = uid(); made.exp.push(id);
+      state.expenses.push({ id, descricao: nome, categoria: r.categoria || 'Sem categoria', tipo: 'Pontual', metodoPagamento: metodoDe(r.metodo || fatMetodo(fatK(r.raw))), conta,
+        valorEstimado: valor, valorReal: valor, status: 'Pago', dataPagamento: r.date, restituido: false, observacao: obs, parcelaAtual: null, parcelaTotal: null, grupoParcelaId: null, criadoEm: now + i });
+    } else if (r.dest === 'ganho') {
+      let cat = r.categoria || fatPickCat(['Outros'], state.config.categoriasGanhos);
+      if (!cat) { addCategoria('categoriasGanhos', 'Outros'); cat = 'Outros'; }
+      const id = uid(); made.inc.push(id);
+      state.incomes.push({ id, descricao: nome, categoria: cat, tipo: r.tipoLanc || 'Pontual', valor, dataPagamento: r.date, observacao: obs, criadoEm: now + i });
+    } else {
+      const invId = invFor(r);
+      const inv = state.investments.find(x => x.id === invId);
+      if (!inv) return;
+      inv.movimentacoes = inv.movimentacoes || [];
+      const mv = { id: uid(), tipo: r.invTipo, valor, data: r.date, observacao: obs };
+      inv.movimentacoes.push(mv); made.movs.push([invId, mv.id]);
+    }
+  });
+  if (made.exp.length) save('expenses');
+  if (made.inc.length) save('incomes');
+  if (made.movs.length || made.inv.length) save('investments');
+  const months = sel.map(r => r.date.slice(0, 7)).sort();
+  const ui = state.ui;
+  ui.tab = 'resumo'; ui.lancLimit = 100;
+  if (months[0] === months[months.length - 1]) { ui.rangeMode = 'month'; ui.selectedMonth = months[0]; }
+  else { ui.rangeMode = 'range'; ui.rangeStart = months[0]; ui.rangeEnd = months[months.length - 1]; }
+  fatura.token++;
+  closeDrawer(true);
+  render();
+  window.scrollTo(0, 0);
+  const parts = [];
+  if (made.exp.length) parts.push(`${made.exp.length} ${made.exp.length === 1 ? 'gasto' : 'gastos'}`);
+  if (made.inc.length) parts.push(`${made.inc.length} ${made.inc.length === 1 ? 'ganho' : 'ganhos'}`);
+  if (made.movs.length) parts.push(`${made.movs.length} ${made.movs.length === 1 ? 'movimentação' : 'movimentações'} de investimento`);
+  showToast(`Inserido: ${parts.join(', ')}.`, {
+    duration: 10000,
+    action: { label: 'Desfazer', onClick: () => {
+      const e = new Set(made.exp), n = new Set(made.inc), iv = new Set(made.inv);
+      state.expenses = state.expenses.filter(x => !e.has(x.id));
+      state.incomes = state.incomes.filter(x => !n.has(x.id));
+      const mv = new Set(made.movs.map(m => m[1]));
+      state.investments.forEach((inv) => { inv.movimentacoes = (inv.movimentacoes || []).filter(m => !mv.has(m.id)); });
+      state.investments = state.investments.filter(x => !iv.has(x.id));
+      save('expenses'); save('incomes'); save('investments'); render();
+    } },
   });
 }
 
@@ -3982,7 +4514,7 @@ function bindEvents() {
     else if (t.id === 'import-file') importData(ev);
     else if (t.id === 'fatura-file') faturaOnFile(t);
     else if (t.id === 'fat-bank') { fatura.bank = t.value; faturaRefresh(); }
-    else if (t.dataset && t.dataset.fat === 'cat') faturaEdit(t);
+    else if (t.dataset && (t.dataset.fat === 'cat' || t.dataset.fat === 'inv' || t.dataset.fat === 'dest')) faturaEdit(t);
     else if (t.closest && t.closest('#expense-form')) syncExpenseForm();
   });
   document.addEventListener('keydown', (ev) => {
