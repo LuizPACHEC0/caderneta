@@ -2433,6 +2433,7 @@ function renderGanhos() {
     <div class="toolbar">
       <label class="search">${icon('search', 18)}<input type="search" id="ganho-busca" placeholder="Buscar ganho" value="${escapeHtml(f.busca)}" aria-label="Buscar ganho"></label>
       <span class="grow"></span>
+      <button type="button" class="btn" data-action="import-fatura">${icon('upload', 18)}Importar extrato</button>
       <button type="button" class="btn primary" data-action="open-income-modal">${icon('plus', 18)}Novo ganho</button>
     </div>
     <div id="results">${renderGanhosResults()}</div></div>`;
